@@ -1,4 +1,5 @@
 #include "OBSBasicSettings.hpp"
+#include <widgets/OBSBasic.hpp>
 
 #include <OBSApp.hpp>
 #include <utility/platform.hpp>
@@ -30,6 +31,12 @@ void OBSBasicSettings::InitAppearancePage()
 
 	connect(App(), &OBSApp::StyleChanged, this, &OBSBasicSettings::updateAppearanceControls);
 	updateAppearanceControls();
+
+	connect(ui->enableOSD, &QAbstractButton::toggled, this, &OBSBasicSettings::AppearanceChanged);
+	connect(ui->enableStreamOSD, &QAbstractButton::toggled, this, &OBSBasicSettings::AppearanceChanged);
+	connect(ui->enableVirtualCamOSD, &QAbstractButton::toggled, this, &OBSBasicSettings::AppearanceChanged);
+	connect(ui->osdPosition, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+		&OBSBasicSettings::AppearanceChanged);
 }
 
 void OBSBasicSettings::LoadThemeList(bool reload)
@@ -103,7 +110,22 @@ void OBSBasicSettings::LoadAppearanceSettings(bool reload)
 	if (densityButton) {
 		densityButton->setChecked(true);
 	}
+	if (densityButton) {
+		densityButton->setChecked(true);
+	}
 	updateAppearanceControls();
+
+	bool recordingEnabled = config_get_bool(App()->GetUserConfig(), "Appearance", "OSDRecordingEnabled");
+	ui->enableOSD->setChecked(recordingEnabled);
+
+	bool streamingEnabled = config_get_bool(App()->GetUserConfig(), "Appearance", "OSDStreamingEnabled");
+	ui->enableStreamOSD->setChecked(streamingEnabled);
+
+	bool virtualCamEnabled = config_get_bool(App()->GetUserConfig(), "Appearance", "OSDVirtualCamEnabled");
+	ui->enableVirtualCamOSD->setChecked(virtualCamEnabled);
+
+	int osdPos = config_get_int(App()->GetUserConfig(), "Appearance", "OSDPosition");
+	ui->osdPosition->setCurrentIndex(osdPos);
 
 	loading = false;
 }
@@ -123,6 +145,13 @@ void OBSBasicSettings::SaveAppearanceSettings()
 	config_set_int(config, "Appearance", "Density", densityId);
 
 	App()->SetTheme(currentTheme->id);
+
+	config_set_bool(config, "Appearance", "OSDRecordingEnabled", ui->enableOSD->isChecked());
+	config_set_bool(config, "Appearance", "OSDStreamingEnabled", ui->enableStreamOSD->isChecked());
+	config_set_bool(config, "Appearance", "OSDVirtualCamEnabled", ui->enableVirtualCamOSD->isChecked());
+	config_set_int(config, "Appearance", "OSDPosition", ui->osdPosition->currentIndex());
+
+	main->UpdateOSDSettings();
 }
 
 void OBSBasicSettings::on_theme_activated(int)

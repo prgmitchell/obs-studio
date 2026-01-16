@@ -655,6 +655,7 @@ private slots:
 
 public:
 	void ResetUI();
+	void UpdateOSDSettings();
 
 	void CreateInteractionWindow(obs_source_t *source);
 	void CreateFiltersWindow(obs_source_t *source);

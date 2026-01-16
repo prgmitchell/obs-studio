@@ -870,6 +870,12 @@ void OBSBasic::InitBasicConfigDefaults2()
 
 	config_set_default_string(activeConfiguration, "AdvOut", "AudioEncoder", aac_default);
 	config_set_default_string(activeConfiguration, "AdvOut", "RecAudioEncoder", aac_default);
+
+	config_set_default_bool(activeConfiguration, "Appearance", "OSDRecordingEnabled", true);
+	config_set_default_bool(activeConfiguration, "Appearance", "OSDStreamingEnabled", true);
+	config_set_default_bool(activeConfiguration, "Appearance", "OSDVirtualCamEnabled", true);
+	config_set_default_int(activeConfiguration, "Appearance", "OSDPosition",
+			       (long long)OBSBasicOSD::OSDPosition::TopRight);
 }
 
 bool OBSBasic::InitBasicConfig()
@@ -1056,6 +1062,8 @@ void OBSBasic::OBSInit()
 	CreateHotkeys();
 
 	InitPrimitives();
+
+	UpdateOSDSettings();
 
 	sceneDuplicationMode = config_get_bool(App()->GetUserConfig(), "BasicWindow", "SceneDuplicationMode");
 	swapScenesMode = config_get_bool(App()->GetUserConfig(), "BasicWindow", "SwapScenesMode");
@@ -1463,11 +1471,29 @@ void OBSBasic::applicationShutdown() noexcept
 
 #ifdef BROWSER_AVAILABLE
 	DestroyPanelCookieManager();
-	delete cef;
+	if (cef)
+		delete cef;
 	cef = nullptr;
 #endif
 
 	handledShutdown = true;
+}
+
+void OBSBasic::UpdateOSDSettings()
+{
+	config_t *config = App()->GetUserConfig();
+	bool recordingEnabled = config_get_bool(config, "Appearance", "OSDRecordingEnabled");
+	bool streamingEnabled = config_get_bool(config, "Appearance", "OSDStreamingEnabled");
+	bool virtualCamEnabled = config_get_bool(config, "Appearance", "OSDVirtualCamEnabled");
+	int pos = (int)config_get_int(config, "Appearance", "OSDPosition");
+
+	if (!osd)
+		return;
+
+	osd->SetRecordingOSDEnabled(recordingEnabled);
+	osd->SetStreamingOSDEnabled(streamingEnabled);
+	osd->SetVirtualCamOSDEnabled(virtualCamEnabled);
+	osd->SetOSDPosition((OBSBasicOSD::OSDPosition)pos);
 }
 
 static inline int AttemptToResetVideo(struct obs_video_info *ovi)

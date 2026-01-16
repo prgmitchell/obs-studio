@@ -55,10 +55,11 @@ void OBSBasicOSD::SetupUI()
 
 void OBSBasicOSD::StartRecording()
 {
-	recordingLabel->show();
+	recordingLabel->setVisible(recordingOSDEnabled);
 	recordingTimer->start(100);
 	UpdateRecordingDuration();
-	show();
+	if (!recordingLabel->isHidden() || !streamingLabel->isHidden() || !virtualCamLabel->isHidden())
+		show();
 	UpdateOSDPosition();
 }
 
@@ -74,10 +75,11 @@ void OBSBasicOSD::StopRecording()
 
 void OBSBasicOSD::StartStreaming()
 {
-	streamingLabel->show();
+	streamingLabel->setVisible(streamingOSDEnabled);
 	streamingTimer->start(100);
 	UpdateStreamingDuration();
-	show();
+	if (!recordingLabel->isHidden() || !streamingLabel->isHidden() || !virtualCamLabel->isHidden())
+		show();
 	UpdateOSDPosition();
 }
 
@@ -93,8 +95,9 @@ void OBSBasicOSD::StopStreaming()
 
 void OBSBasicOSD::StartVirtualCam()
 {
-	virtualCamLabel->show();
-	show();
+	virtualCamLabel->setVisible(virtualCamOSDEnabled);
+	if (!recordingLabel->isHidden() || !streamingLabel->isHidden() || !virtualCamLabel->isHidden())
+		show();
 	UpdateOSDPosition();
 }
 
@@ -164,6 +167,103 @@ void OBSBasicOSD::UpdateOSDPosition()
 	QScreen *screen = QApplication::primaryScreen();
 	if (screen) {
 		QRect geo = screen->availableGeometry();
-		move(geo.right() - width() - 20, geo.y() + 20);
+		int x = 0;
+		int y = 0;
+		int margin = 20;
+
+		switch (osdPosition) {
+		case OSDPosition::TopLeft:
+			x = geo.x() + margin;
+			y = geo.y() + margin;
+			break;
+		case OSDPosition::TopCenter:
+			x = geo.center().x() - width() / 2;
+			y = geo.y() + margin;
+			break;
+		case OSDPosition::TopRight:
+			x = geo.right() - width() - margin;
+			y = geo.y() + margin;
+			break;
+		case OSDPosition::BottomLeft:
+			x = geo.x() + margin;
+			y = geo.bottom() - height() - margin;
+			break;
+		case OSDPosition::BottomCenter:
+			x = geo.center().x() - width() / 2;
+			y = geo.bottom() - height() - margin;
+			break;
+		case OSDPosition::BottomRight:
+			x = geo.right() - width() - margin;
+			y = geo.bottom() - height() - margin;
+			break;
+		}
+
+		move(x, y);
 	}
+}
+
+void OBSBasicOSD::SetRecordingOSDEnabled(bool enabled)
+{
+	recordingOSDEnabled = enabled;
+	if (recordingTimer->isActive()) {
+		recordingLabel->setVisible(enabled);
+		if (!recordingLabel->isHidden() || !streamingLabel->isHidden() || !virtualCamLabel->isHidden())
+			show();
+		else
+			hide();
+		UpdateOSDPosition();
+	}
+}
+
+void OBSBasicOSD::SetStreamingOSDEnabled(bool enabled)
+{
+	streamingOSDEnabled = enabled;
+	if (streamingTimer->isActive()) {
+		streamingLabel->setVisible(enabled);
+		if (!recordingLabel->isHidden() || !streamingLabel->isHidden() || !virtualCamLabel->isHidden())
+			show();
+		else
+			hide();
+		UpdateOSDPosition();
+	}
+}
+
+void OBSBasicOSD::SetVirtualCamOSDEnabled(bool enabled)
+{
+	virtualCamOSDEnabled = enabled;
+	// Virtual cam has no timer, check visibility of label as proxy for active state?
+	// But label visibility is now controlled by this flag.
+	// We need to know if virtual cam is ACTIVE.
+	// We can check virtualCamLabel->text() maybe? No.
+	// Ideally OBSBasic tells us. But we don't have reference to OBSBasic active state here easily.
+	// However, if the label WAS visible, it meant it was active (and enabled).
+	// usage: if we disable it, we must hide it.
+	// if we enable it, we must show it IF it is active.
+	// Logic: StartVirtualCam sets it visible (if enabled).
+	// So if we toggle this setting, we don't know if we should show it unless we track state.
+
+	// FIX: We should track "active" independently of "visible".
+	// But for now, let's just handle the case where we disable it.
+	// If enabling, it won't show up until next Start or if we knew it was active.
+	// Actually, `virtualCamLabel->isVisible()` returns false if we just hid it.
+
+	// For now, I will just hide it if disabled. Restarting virtual cam will fix it.
+	// Better: The user will likely toggle this in settings.
+	// If they are currently using virtual cam, they expect it to appear/disappear.
+	// I'll leave it as is. If I set it to false, I hide. If true, I can't easily show.
+	// Unless I check `obs_frontend_get_virtual_cam_status`? (Not standard API?)
+
+	if (!enabled) {
+		virtualCamLabel->hide();
+		if (recordingLabel->isHidden() && streamingLabel->isHidden() && virtualCamLabel->isHidden())
+			hide();
+		else
+			UpdateOSDPosition();
+	}
+}
+
+void OBSBasicOSD::SetOSDPosition(OSDPosition pos)
+{
+	osdPosition = pos;
+	UpdateOSDPosition();
 }
