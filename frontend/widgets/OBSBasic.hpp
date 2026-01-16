@@ -59,7 +59,9 @@ class YouTubeAppDock;
 #endif
 class QMessageBox;
 class QWidgetAction;
+class QWidgetAction;
 struct QuickTransition;
+class OBSBasicOSD;
 
 namespace OBS {
 class SceneCollection;
@@ -360,6 +362,7 @@ public:
 	 */
 private:
 	QPointer<QWidget> extraBrowsers;
+	QPointer<OBSBasicOSD> osd;
 
 #ifdef BROWSER_AVAILABLE
 	QPointer<QAction> extraBrowserMenuDocksSeparator;

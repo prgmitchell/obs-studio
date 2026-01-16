@@ -18,6 +18,7 @@
 ******************************************************************************/
 
 #include "OBSBasic.hpp"
+#include "OBSBasicOSD.hpp"
 #include "ui-config.h"
 #include "ColorSelect.hpp"
 #include "OBSBasicControls.hpp"
@@ -244,6 +245,8 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 
 	ui->setupUi(this);
 	ui->previewDisabledWidget->setVisible(false);
+
+	osd = new OBSBasicOSD(this);
 
 	/* Set up streaming connections */
 	connect(
@@ -2116,6 +2119,35 @@ void OBSBasic::OnEvent(enum obs_frontend_event event)
 {
 	if (api)
 		api->on_event(event);
+
+	switch (event) {
+	case OBS_FRONTEND_EVENT_RECORDING_STARTED:
+		if (osd)
+			osd->StartRecording();
+		break;
+	case OBS_FRONTEND_EVENT_RECORDING_STOPPED:
+		if (osd)
+			osd->StopRecording();
+		break;
+	case OBS_FRONTEND_EVENT_STREAMING_STARTED:
+		if (osd)
+			osd->StartStreaming();
+		break;
+	case OBS_FRONTEND_EVENT_STREAMING_STOPPED:
+		if (osd)
+			osd->StopStreaming();
+		break;
+	case OBS_FRONTEND_EVENT_VIRTUALCAM_STARTED:
+		if (osd)
+			osd->StartVirtualCam();
+		break;
+	case OBS_FRONTEND_EVENT_VIRTUALCAM_STOPPED:
+		if (osd)
+			osd->StopVirtualCam();
+		break;
+	default:
+		break;
+	}
 }
 
 OBSPromptResult OBSBasic::PromptForName(const OBSPromptRequest &request, const OBSPromptCallback &callback)

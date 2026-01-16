@@ -28,6 +28,8 @@ target_sources(
     widgets/OBSBasic_Profiles.cpp
     widgets/OBSBasic_Projectors.cpp
     widgets/OBSBasic_Recording.cpp
+    widgets/OBSBasicOSD.cpp
+    widgets/OBSBasicOSD.hpp
     widgets/OBSBasic_ReplayBuffer.cpp
     widgets/OBSBasic_SceneCollections.cpp
     widgets/OBSBasic_SceneItems.cpp
