@@ -63,6 +63,7 @@ extern void d3d10_capture(void *swap, void *backbuffer);
 extern void d3d10_free(void);
 extern void d3d11_capture(void *swap, void *backbuffer);
 extern void d3d11_free(void);
+extern void d3d11_draw_overlay(void *swap);
 
 #ifdef COMPILE_D3D12_HOOK
 extern void d3d12_capture(void *swap, void *backbuffer);
@@ -78,6 +79,7 @@ extern bool capture_init_shmem(struct shmem_data **data, HWND window, uint32_t c
 extern void capture_free(void);
 
 extern struct hook_info *global_hook_info;
+extern struct osd_state *global_osd_state;
 
 struct vertex {
 	struct {

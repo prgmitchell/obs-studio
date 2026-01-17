@@ -23,10 +23,21 @@
 
 #define SHMEM_HOOK_INFO L"CaptureHook_HookInfo"
 #define SHMEM_TEXTURE L"CaptureHook_Texture"
+#define SHMEM_OSD_STATE L"CaptureHook_OSDState"
 
 #define PIPE_NAME "CaptureHook_Pipe"
 
 #pragma pack(push, 8)
+
+struct osd_state {
+	uint32_t version;
+	bool visible;
+	bool recording_active;
+	bool streaming_active;
+	char text[64];
+	int position;
+	uint32_t color;
+};
 
 struct d3d8_offsets {
 	uint32_t present;

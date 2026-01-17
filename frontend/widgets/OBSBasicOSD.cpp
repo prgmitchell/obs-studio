@@ -1,10 +1,19 @@
 #include "OBSBasicOSD.hpp"
+
 #include <QHBoxLayout>
 #include <QApplication>
 #include <QScreen>
 #include <QTime>
 #include <obs.hpp>
 #include <obs-frontend-api.h>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include "../../../shared/obs-hook-config/graphics-hook-info.h"
+#endif
 
 OBSBasicOSD::OBSBasicOSD(QWidget *parent) : QWidget(parent)
 {
@@ -19,9 +28,21 @@ OBSBasicOSD::OBSBasicOSD(QWidget *parent) : QWidget(parent)
 
 	streamingTimer = new QTimer(this);
 	connect(streamingTimer, &QTimer::timeout, this, &OBSBasicOSD::UpdateStreamingDuration);
+
+#ifdef _WIN32
+	InitSharedMemory();
+#endif
 }
 
-OBSBasicOSD::~OBSBasicOSD() {}
+OBSBasicOSD::~OBSBasicOSD()
+{
+#ifdef _WIN32
+	if (osdState)
+		UnmapViewOfFile(osdState);
+	if (osdSharedMap)
+		CloseHandle((HANDLE)osdSharedMap);
+#endif
+}
 
 void OBSBasicOSD::SetupUI()
 {
@@ -99,6 +120,9 @@ void OBSBasicOSD::StartVirtualCam()
 	if (!recordingLabel->isHidden() || !streamingLabel->isHidden() || !virtualCamLabel->isHidden())
 		show();
 	UpdateOSDPosition();
+#ifdef _WIN32
+	UpdateSharedMemory();
+#endif
 }
 
 void OBSBasicOSD::StopVirtualCam()
@@ -108,6 +132,9 @@ void OBSBasicOSD::StopVirtualCam()
 		hide();
 	else
 		UpdateOSDPosition();
+#ifdef _WIN32
+	UpdateSharedMemory();
+#endif
 }
 
 void OBSBasicOSD::UpdateRecordingDuration()
@@ -133,6 +160,9 @@ void OBSBasicOSD::UpdateRecordingDuration()
 
 	// Position handling
 	UpdateOSDPosition();
+#ifdef _WIN32
+	UpdateSharedMemory();
+#endif
 }
 
 void OBSBasicOSD::UpdateStreamingDuration()
@@ -158,6 +188,9 @@ void OBSBasicOSD::UpdateStreamingDuration()
 
 	// Position handling
 	UpdateOSDPosition();
+#ifdef _WIN32
+	UpdateSharedMemory();
+#endif
 }
 
 void OBSBasicOSD::UpdateOSDPosition()
@@ -266,4 +299,63 @@ void OBSBasicOSD::SetOSDPosition(OSDPosition pos)
 {
 	osdPosition = pos;
 	UpdateOSDPosition();
+#ifdef _WIN32
+	UpdateSharedMemory();
+#endif
 }
+
+#ifdef _WIN32
+void OBSBasicOSD::InitSharedMemory()
+{
+	osdSharedMap = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(struct osd_state),
+					  SHMEM_OSD_STATE);
+	if (osdSharedMap) {
+		osdState = (struct osd_state *)MapViewOfFile((HANDLE)osdSharedMap, FILE_MAP_ALL_ACCESS, 0, 0,
+							     sizeof(struct osd_state));
+		if (osdState) {
+			memset(osdState, 0, sizeof(struct osd_state));
+			osdState->version = 1;
+		}
+	}
+}
+
+void OBSBasicOSD::UpdateSharedMemory()
+{
+	if (!osdState)
+		return;
+
+	osdState->recording_active = recordingTimer->isActive() && recordingOSDEnabled;
+	osdState->streaming_active = streamingTimer->isActive() && streamingOSDEnabled;
+	// We use label visibility as proxy for virtual cam active state since we don't have a timer
+	bool virtual_cam_active = !virtualCamLabel->isHidden();
+
+	osdState->visible = osdState->recording_active || osdState->streaming_active || virtual_cam_active;
+
+	// Build text with ASCII prefixes (emoji not supported by bitmap font)
+	QString text;
+	if (osdState->recording_active) {
+		// Extract just the time portion (remove emoji prefix)
+		QString recText = recordingLabel->text();
+		int spaceIdx = recText.indexOf(' ');
+		QString timeStr = (spaceIdx >= 0) ? recText.mid(spaceIdx + 1) : recText;
+		text += QString("REC %1  ").arg(timeStr);
+	}
+	if (osdState->streaming_active) {
+		// Extract just the time portion (remove emoji prefix)
+		QString streamText = streamingLabel->text();
+		int spaceIdx = streamText.indexOf(' ');
+		QString timeStr = (spaceIdx >= 0) ? streamText.mid(spaceIdx + 1) : streamText;
+		text += QString("LIVE %1  ").arg(timeStr);
+	}
+	if (virtual_cam_active) {
+		text += "CAM";
+	}
+
+	// Copy to shared memory (ASCII only)
+	std::string s = text.toUtf8().constData();
+	strncpy(osdState->text, s.c_str(), 63);
+	osdState->text[63] = 0;
+
+	osdState->position = (int)osdPosition;
+}
+#endif

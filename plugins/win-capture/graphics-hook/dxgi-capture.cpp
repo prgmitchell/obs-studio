@@ -5,6 +5,7 @@
 #include <inttypes.h>
 
 #include "graphics-hook.h"
+#include "../../../shared/obs-hook-config/graphics-hook-info.h"
 
 #include <detours.h>
 
@@ -216,6 +217,10 @@ static HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain *swap, UINT sync_in
 		}
 	}
 
+	if (global_osd_state && global_osd_state->visible) {
+		d3d11_draw_overlay(swap);
+	}
+
 	++dxgi_presenting;
 	const HRESULT hr = RealPresent(swap, sync_interval, flags);
 	--dxgi_presenting;
@@ -276,6 +281,10 @@ static HRESULT STDMETHODCALLTYPE hook_present1(IDXGISwapChain1 *swap, UINT sync_
 			data.capture(swap, backbuffer);
 			backbuffer->Release();
 		}
+	}
+
+	if (global_osd_state && global_osd_state->visible) {
+		d3d11_draw_overlay(swap);
 	}
 
 	++dxgi_presenting;

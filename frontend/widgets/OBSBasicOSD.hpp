@@ -43,4 +43,9 @@ private:
 
 	void SetupUI();
 	void UpdateOSDPosition();
+
+	void *osdSharedMap = nullptr;
+	struct osd_state *osdState = nullptr;
+	void InitSharedMemory();
+	void UpdateSharedMemory();
 };

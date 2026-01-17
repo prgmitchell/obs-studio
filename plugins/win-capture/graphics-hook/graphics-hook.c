@@ -41,6 +41,9 @@ static HANDLE signal_init = NULL;
 HANDLE tex_mutexes[2] = {NULL, NULL};
 static HANDLE filemap_hook_info = NULL;
 
+static HANDLE osd_filemap = NULL;
+struct osd_state *global_osd_state = NULL;
+
 static HINSTANCE dll_inst = NULL;
 static volatile bool stop_loop = false;
 static HANDLE dup_hook_mutex = NULL;
@@ -186,6 +189,27 @@ static inline bool init_hook_info(void)
 	return true;
 }
 
+static inline void init_osd_state(void)
+{
+	if (global_osd_state)
+		return;
+
+	osd_filemap = OpenFileMappingW(FILE_MAP_READ, false, SHMEM_OSD_STATE);
+	if (!osd_filemap) {
+		hlog("init_osd_state: OpenFileMappingW failed. Error: %lu", GetLastError());
+		return;
+	}
+
+	global_osd_state = MapViewOfFile(osd_filemap, FILE_MAP_READ, 0, 0, sizeof(struct osd_state));
+	if (!global_osd_state) {
+		hlog("init_osd_state: MapViewOfFile failed. Error: %lu", GetLastError());
+		CloseHandle(osd_filemap);
+		osd_filemap = NULL;
+	} else {
+		hlog("init_osd_state: Shared memory mapped successfully. visible=%d", global_osd_state->visible);
+	}
+}
+
 #define DEF_FLAGS (WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS)
 
 static DWORD WINAPI dummy_window_thread(LPVOID *unused)
@@ -272,7 +296,14 @@ static void free_hook(void)
 	close_handle(&signal_stop);
 	close_handle(&signal_restart);
 	close_handle(&dup_hook_mutex);
+	close_handle(&dup_hook_mutex);
 	ipc_pipe_client_free(&pipe);
+
+	if (global_osd_state) {
+		UnmapViewOfFile(global_osd_state);
+		global_osd_state = NULL;
+	}
+	close_handle(&osd_filemap);
 }
 
 static inline bool d3d8_hookable(void)
@@ -410,8 +441,11 @@ static inline void capture_loop(void)
 	for (size_t n = 0; !stop_loop; n++) {
 		/* this causes it to check every 4 seconds, but still with
 		 * a small sleep interval in case the thread needs to stop */
-		if (n % 100 == 0)
+		if (n % 100 == 0) {
 			attempt_hook();
+			if (!global_osd_state)
+				init_osd_state();
+		}
 		Sleep(40);
 	}
 }
