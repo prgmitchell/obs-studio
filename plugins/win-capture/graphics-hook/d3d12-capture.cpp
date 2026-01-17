@@ -309,6 +309,80 @@ static inline void d3d12_shtex_capture(IDXGISwapChain *swap)
 	}
 }
 
+// Forward declaration of the D3D11 OSD rendering function
+// We'll reuse the D3D11 OSD resources by calling d3d11_draw_overlay_with_device
+extern void d3d11_draw_overlay_with_device(ID3D11Device *device, ID3D11DeviceContext *context,
+					   ID3D11RenderTargetView *rtv, UINT width, UINT height);
+
+void d3d12_draw_overlay(void *swap_ptr)
+{
+	if (!data.device11on12 || !data.device11 || !data.context11)
+		return;
+	if (!global_osd_state || !global_osd_state->visible)
+		return;
+
+	IDXGISwapChain *swap = (IDXGISwapChain *)swap_ptr;
+	bool dxgi_1_4 = data.dxgi_1_4;
+	UINT cur_idx;
+
+	if (dxgi_1_4) {
+		IDXGISwapChain3 *swap3 = reinterpret_cast<IDXGISwapChain3 *>(swap);
+		cur_idx = swap3->GetCurrentBackBufferIndex();
+	} else {
+		cur_idx = data.cur_backbuffer;
+	}
+
+	ID3D12Resource *backbuffer12 = nullptr;
+	HRESULT hr = swap->GetBuffer(cur_idx, IID_PPV_ARGS(&backbuffer12));
+	if (FAILED(hr))
+		return;
+
+	// Wrap the D3D12 backbuffer as a D3D11 resource
+	D3D11_RESOURCE_FLAGS rf11 = {};
+	rf11.BindFlags = D3D11_BIND_RENDER_TARGET;
+	ID3D11Resource *backbuffer11 = nullptr;
+	hr = data.device11on12->CreateWrappedResource(backbuffer12, &rf11, D3D12_RESOURCE_STATE_RENDER_TARGET,
+						      D3D12_RESOURCE_STATE_PRESENT, IID_PPV_ARGS(&backbuffer11));
+	if (FAILED(hr)) {
+		backbuffer12->Release();
+		return;
+	}
+
+	data.device11on12->AcquireWrappedResources(&backbuffer11, 1);
+
+	// Create render target view
+	ID3D11Texture2D *tex = nullptr;
+	hr = backbuffer11->QueryInterface(IID_PPV_ARGS(&tex));
+	if (FAILED(hr)) {
+		data.device11on12->ReleaseWrappedResources(&backbuffer11, 1);
+		backbuffer11->Release();
+		backbuffer12->Release();
+		return;
+	}
+
+	ID3D11RenderTargetView *rtv = nullptr;
+	hr = data.device11->CreateRenderTargetView(tex, nullptr, &rtv);
+	if (FAILED(hr)) {
+		tex->Release();
+		data.device11on12->ReleaseWrappedResources(&backbuffer11, 1);
+		backbuffer11->Release();
+		backbuffer12->Release();
+		return;
+	}
+
+	// Call the D3D11 OSD rendering with our 11on12 device
+	d3d11_draw_overlay_with_device(data.device11, data.context11, rtv, data.cx, data.cy);
+
+	rtv->Release();
+	tex->Release();
+
+	data.device11on12->ReleaseWrappedResources(&backbuffer11, 1);
+	data.context11->Flush();
+
+	backbuffer11->Release();
+	backbuffer12->Release();
+}
+
 void d3d12_capture(void *swap_ptr, void *)
 {
 	IDXGISwapChain *swap = (IDXGISwapChain *)swap_ptr;

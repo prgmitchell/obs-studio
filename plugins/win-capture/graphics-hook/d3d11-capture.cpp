@@ -563,6 +563,10 @@ static bool osd_init_resources(ID3D11Device *device)
 	return true;
 }
 
+// Forward declaration
+void d3d11_draw_overlay_with_device(ID3D11Device *device, ID3D11DeviceContext *context, ID3D11RenderTargetView *rtv,
+				    UINT width, UINT height);
+
 void d3d11_draw_overlay(void *swap_ptr)
 {
 	if (osd_init_failed)
@@ -615,13 +619,39 @@ void d3d11_draw_overlay(void *swap_ptr)
 		return;
 	}
 
-	// Build text from shared memory
+	// Call the shared OSD rendering function
+	d3d11_draw_overlay_with_device(device, context, rtv, bb_desc.Width, bb_desc.Height);
+
+	rtv->Release();
+	context->Release();
+	device->Release();
+}
+
+// Shared OSD rendering function that can be called from both D3D11 and D3D12 overlays
+void d3d11_draw_overlay_with_device(ID3D11Device *device, ID3D11DeviceContext *context, ID3D11RenderTargetView *rtv,
+				    UINT width, UINT height)
+{
+	if (!global_osd_state)
+		return;
+	if (osd_init_failed)
+		return;
+
+	// Initialize resources if device changed
+	if (device != osd_device) {
+		osd_free_resources();
+		osd_device = device;
+		osd_device->AddRef();
+		if (!osd_init_resources(device)) {
+			hlog("Failed to initialize OSD resources for D3D12");
+			osd_init_failed = true;
+			return;
+		}
+	}
+
+	HRESULT hr;
 	const char *text = global_osd_state->text;
 	int text_len = (int)strlen(text);
 	if (text_len == 0 || text_len > 63) {
-		rtv->Release();
-		context->Release();
-		device->Release();
 		return;
 	}
 
@@ -645,24 +675,24 @@ void d3d11_draw_overlay(void *swap_ptr)
 		y = margin;
 		break;
 	case 1: // TopCenter
-		x = ((float)bb_desc.Width - total_text_w - padding * 2) / 2.0f;
+		x = ((float)width - total_text_w - padding * 2) / 2.0f;
 		y = margin;
 		break;
 	case 2: // TopRight
-		x = (float)bb_desc.Width - total_text_w - padding * 2 - margin;
+		x = (float)width - total_text_w - padding * 2 - margin;
 		y = margin;
 		break;
 	case 3: // BottomLeft
 		x = margin;
-		y = (float)bb_desc.Height - total_text_h - padding * 2 - margin;
+		y = (float)height - total_text_h - padding * 2 - margin;
 		break;
 	case 4: // BottomCenter
-		x = ((float)bb_desc.Width - total_text_w - padding * 2) / 2.0f;
-		y = (float)bb_desc.Height - total_text_h - padding * 2 - margin;
+		x = ((float)width - total_text_w - padding * 2) / 2.0f;
+		y = (float)height - total_text_h - padding * 2 - margin;
 		break;
 	case 5: // BottomRight
-		x = (float)bb_desc.Width - total_text_w - padding * 2 - margin;
-		y = (float)bb_desc.Height - total_text_h - padding * 2 - margin;
+		x = (float)width - total_text_w - padding * 2 - margin;
+		y = (float)height - total_text_h - padding * 2 - margin;
 		break;
 	}
 
@@ -671,9 +701,6 @@ void d3d11_draw_overlay(void *swap_ptr)
 	D3D11_MAPPED_SUBRESOURCE mapped;
 	hr = context->Map(osd_vb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
 	if (FAILED(hr)) {
-		rtv->Release();
-		context->Release();
-		device->Release();
 		return;
 	}
 	verts = (OSDVertex *)mapped.pData;
@@ -712,8 +739,8 @@ void d3d11_draw_overlay(void *swap_ptr)
 		hr = context->Map(osd_cb_screen, 0, D3D11_MAP_WRITE_DISCARD, 0, &cb_mapped);
 		if (SUCCEEDED(hr)) {
 			float *data = (float *)cb_mapped.pData;
-			data[0] = (float)bb_desc.Width;
-			data[1] = (float)bb_desc.Height;
+			data[0] = (float)width;
+			data[1] = (float)height;
 			data[2] = 0;
 			data[3] = 0;
 			context->Unmap(osd_cb_screen, 0);
@@ -746,8 +773,8 @@ void d3d11_draw_overlay(void *swap_ptr)
 	context->RSSetState(osd_raster);
 
 	D3D11_VIEWPORT vp = {};
-	vp.Width = (float)bb_desc.Width;
-	vp.Height = (float)bb_desc.Height;
+	vp.Width = (float)width;
+	vp.Height = (float)height;
 	vp.MaxDepth = 1.0f;
 	context->RSSetViewports(1, &vp);
 
@@ -773,8 +800,4 @@ void d3d11_draw_overlay(void *swap_ptr)
 		old_rtv->Release();
 	if (old_dsv)
 		old_dsv->Release();
-
-	rtv->Release();
-	context->Release();
-	device->Release();
 }

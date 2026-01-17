@@ -68,6 +68,7 @@ extern void d3d11_draw_overlay(void *swap);
 #ifdef COMPILE_D3D12_HOOK
 extern void d3d12_capture(void *swap, void *backbuffer);
 extern void d3d12_free(void);
+extern void d3d12_draw_overlay(void *swap);
 #endif
 
 extern bool rehook_gl(void);

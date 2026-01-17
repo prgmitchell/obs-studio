@@ -30,6 +30,7 @@ struct dxgi_swap_data {
 	IDXGISwapChain *swap;
 	void (*capture)(void *, void *);
 	void (*free)(void);
+	void (*draw_overlay)(void *);
 };
 
 static struct dxgi_swap_data data = {};
@@ -51,11 +52,13 @@ static void STDMETHODCALLTYPE SwapChainDestructed(void *pData)
 	}
 }
 
-static void init_swap_data(IDXGISwapChain *swap, void (*capture)(void *, void *), void (*free)(void))
+static void init_swap_data(IDXGISwapChain *swap, void (*capture)(void *, void *), void (*free)(void),
+			   void (*draw_overlay)(void *))
 {
 	data.swap = swap;
 	data.capture = capture;
 	data.free = free;
+	data.draw_overlay = draw_overlay;
 
 	ID3DDestructionNotifier *notifier;
 	if (SUCCEEDED(swap->QueryInterface<ID3DDestructionNotifier>(&notifier))) {
@@ -79,7 +82,7 @@ static bool setup_dxgi(IDXGISwapChain *swap)
 		if (level >= D3D_FEATURE_LEVEL_11_0) {
 			hlog("Found D3D11 11.0 device on swap chain");
 
-			init_swap_data(swap, d3d11_capture, d3d11_free);
+			init_swap_data(swap, d3d11_capture, d3d11_free, d3d11_draw_overlay);
 			return true;
 		}
 	}
@@ -90,7 +93,7 @@ static bool setup_dxgi(IDXGISwapChain *swap)
 
 		hlog("Found D3D10 device on swap chain");
 
-		init_swap_data(swap, d3d10_capture, d3d10_free);
+		init_swap_data(swap, d3d10_capture, d3d10_free, nullptr); // No OSD for D3D10
 		return true;
 	}
 
@@ -100,7 +103,7 @@ static bool setup_dxgi(IDXGISwapChain *swap)
 
 		hlog("Found D3D11 device on swap chain");
 
-		init_swap_data(swap, d3d11_capture, d3d11_free);
+		init_swap_data(swap, d3d11_capture, d3d11_free, d3d11_draw_overlay);
 		return true;
 	}
 
@@ -116,7 +119,7 @@ static bool setup_dxgi(IDXGISwapChain *swap)
 		}
 
 		if (dxgi_possible_swap_queue_count > 0) {
-			init_swap_data(swap, d3d12_capture, d3d12_free);
+			init_swap_data(swap, d3d12_capture, d3d12_free, d3d12_draw_overlay);
 			return true;
 		}
 	}
@@ -217,8 +220,8 @@ static HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain *swap, UINT sync_in
 		}
 	}
 
-	if (global_osd_state && global_osd_state->visible) {
-		d3d11_draw_overlay(swap);
+	if (global_osd_state && global_osd_state->visible && data.draw_overlay) {
+		data.draw_overlay(swap);
 	}
 
 	++dxgi_presenting;
@@ -283,8 +286,8 @@ static HRESULT STDMETHODCALLTYPE hook_present1(IDXGISwapChain1 *swap, UINT sync_
 		}
 	}
 
-	if (global_osd_state && global_osd_state->visible) {
-		d3d11_draw_overlay(swap);
+	if (global_osd_state && global_osd_state->visible && data.draw_overlay) {
+		data.draw_overlay(swap);
 	}
 
 	++dxgi_presenting;
