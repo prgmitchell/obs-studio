@@ -13,6 +13,8 @@
 using namespace std;
 using namespace Gdiplus;
 
+void register_directwrite_source();
+
 #define warning(format, ...) blog(LOG_WARNING, "[%s] " format, obs_source_get_name(source), ##__VA_ARGS__)
 
 #define warn_stat(call)                                                               \
@@ -886,7 +888,7 @@ OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-text", "en-US")
 MODULE_EXPORT const char *obs_module_description(void)
 {
-	return "Windows GDI+ text source";
+	return "Windows text sources";
 }
 
 #define set_vis(var, val, show)                           \
@@ -1153,6 +1155,7 @@ bool obs_module_load(void)
 	obs_register_source(&si);
 	obs_register_source(&si_v2);
 	obs_register_source(&si_v3);
+	register_directwrite_source();
 
 	const GdiplusStartupInput gdip_input;
 	GdiplusStartup(&gdip_token, &gdip_input, nullptr);
