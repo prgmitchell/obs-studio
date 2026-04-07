@@ -71,7 +71,7 @@ enum display_capture_method {
 struct duplicator_capture {
 	obs_source_t *source;
 	pthread_mutex_t update_mutex;
-	char monitor_id[128];
+	char monitor_id[256];
 	char id[128];
 	char alt_id[128];
 	char monitor_name[64];
@@ -182,6 +182,25 @@ static void GetMonitorName(HMONITOR handle, char *name, size_t count)
 	}
 }
 
+static bool parse_monitor_setting_id(const char *setting_id, struct duplicator_monitor_info *monitor)
+{
+	const char *separator = strchr(setting_id, '|');
+	if (!separator)
+		return false;
+
+	const size_t device_len = (size_t)(separator - setting_id);
+	const char *alt_id = separator + 1;
+	if (device_len == 0 || *alt_id == '\0')
+		return false;
+
+	const size_t max_device_len = _countof(monitor->device_id) - 1;
+	const size_t copy_len = (device_len < max_device_len) ? device_len : max_device_len;
+	memcpy(monitor->device_id, setting_id, copy_len);
+	monitor->device_id[copy_len] = '\0';
+	strcpy_s(monitor->alt_id, _countof(monitor->alt_id), alt_id);
+
+	return true;
+}
 static BOOL CALLBACK enum_monitor(HMONITOR handle, HDC hdc, LPRECT rect, LPARAM param)
 {
 	UNUSED_PARAMETER(hdc);
@@ -197,6 +216,9 @@ static BOOL CALLBACK enum_monitor(HMONITOR handle, HDC hdc, LPRECT rect, LPARAM 
 		device.cb = sizeof(device);
 		if (EnumDisplayDevicesA(mi.szDevice, 0, &device, EDD_GET_DEVICE_INTERFACE_NAME)) {
 			match = strcmp(monitor->device_id, device.DeviceID) == 0;
+			if (match && monitor->alt_id[0] != '\0')
+				match = strcmp(monitor->alt_id, mi.szDevice) == 0;
+
 			if (match) {
 				strcpy_s(monitor->id, _countof(monitor->id), device.DeviceID);
 				strcpy_s(monitor->alt_id, _countof(monitor->alt_id), mi.szDevice);
@@ -282,9 +304,12 @@ extern bool wgc_supported;
 static struct duplicator_monitor_info find_monitor(const char *monitor_id)
 {
 	struct duplicator_monitor_info monitor = {0};
-	strcpy_s(monitor.device_id, _countof(monitor.device_id), monitor_id);
+	const bool composite_id = parse_monitor_setting_id(monitor_id, &monitor);
+	if (!composite_id)
+		strcpy_s(monitor.device_id, _countof(monitor.device_id), monitor_id);
+
 	EnumDisplayMonitors(NULL, NULL, &enum_monitor, (LPARAM)&monitor);
-	if (monitor.handle == NULL) {
+	if (!composite_id && monitor.handle == NULL) {
 		EnumDisplayMonitors(NULL, NULL, &enum_monitor_fallback, (LPARAM)&monitor);
 	}
 
@@ -299,7 +324,7 @@ static inline void update_settings(struct duplicator_capture *capture, obs_data_
 
 	capture->method = choose_method((int)obs_data_get_int(settings, "method"), wgc_supported, monitor.handle);
 
-	strcpy_s(capture->monitor_id, _countof(capture->monitor_id), monitor.device_id);
+	strcpy_s(capture->monitor_id, _countof(capture->monitor_id), obs_data_get_string(settings, "monitor_id"));
 	strcpy_s(capture->id, _countof(capture->id), monitor.id);
 	strcpy_s(capture->alt_id, _countof(capture->alt_id), monitor.alt_id);
 	strcpy_s(capture->monitor_name, _countof(capture->monitor_name), monitor.name);
@@ -745,7 +770,10 @@ static BOOL CALLBACK enum_monitor_props(HMONITOR handle, HDC hdc, LPRECT rect, L
 		DISPLAY_DEVICEA device;
 		device.cb = sizeof(device);
 		if (EnumDisplayDevicesA(mi.szDevice, 0, &device, EDD_GET_DEVICE_INTERFACE_NAME)) {
-			obs_property_list_add_string(monitor_list, monitor_desc.array, device.DeviceID);
+			struct dstr monitor_id = {0};
+			dstr_catf(&monitor_id, "%s|%s", device.DeviceID, mi.szDevice);
+			obs_property_list_add_string(monitor_list, monitor_desc.array, monitor_id.array);
+			dstr_free(&monitor_id);
 		} else {
 			blog(LOG_WARNING,
 			     "[duplicator-monitor-capture] EnumDisplayDevices failed for monitor (%s), falling back to szDevice",
