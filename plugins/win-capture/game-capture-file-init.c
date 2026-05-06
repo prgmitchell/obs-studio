@@ -168,6 +168,8 @@ char *get_hook_path(bool b64)
 
 #define IMPLICIT_LAYERS L"SOFTWARE\\Khronos\\Vulkan\\ImplicitLayers"
 
+static bool hook_cache_file_needs_refresh(const wchar_t *src, const wchar_t *dst);
+
 static bool update_hook_file(bool b64)
 {
 	wchar_t temp[MAX_PATH];
@@ -227,8 +229,17 @@ static bool update_hook_file(bool b64)
 		return false;
 #endif
 
+	/* Development builds can keep the same DLL file version. Refresh the
+	 * ProgramData hook cache when the built hook changed anyway. */
+	const bool refresh_same_version = win_version_compare(&ver_dst, &ver_src) == 0 &&
+					  hook_cache_file_needs_refresh(src, dst);
+
+	if (ver_dst.major > ver_src.major) {
+		return false;
+	}
+
 	/* if source is greater than dst, overwrite new file  */
-	while (win_version_compare(&ver_dst, &ver_src) < 0) {
+	while (win_version_compare(&ver_dst, &ver_src) < 0 || refresh_same_version) {
 		if (!CopyFileW(src_json, dst_json, false))
 			return false;
 		if (!CopyFileW(src, dst, false))
@@ -236,6 +247,8 @@ static bool update_hook_file(bool b64)
 
 		if (!get_dll_ver(dst, &ver_dst))
 			return false;
+		if (refresh_same_version)
+			break;
 	}
 
 	/* do not use if major version incremented in target compared to
@@ -245,6 +258,22 @@ static bool update_hook_file(bool b64)
 	}
 
 	return true;
+}
+
+static bool hook_cache_file_needs_refresh(const wchar_t *src, const wchar_t *dst)
+{
+	WIN32_FILE_ATTRIBUTE_DATA src_data;
+	WIN32_FILE_ATTRIBUTE_DATA dst_data;
+
+	if (!GetFileAttributesExW(src, GetFileExInfoStandard, &src_data))
+		return false;
+	if (!GetFileAttributesExW(dst, GetFileExInfoStandard, &dst_data))
+		return true;
+
+	if (src_data.nFileSizeHigh != dst_data.nFileSizeHigh || src_data.nFileSizeLow != dst_data.nFileSizeLow)
+		return true;
+
+	return CompareFileTime(&src_data.ftLastWriteTime, &dst_data.ftLastWriteTime) > 0;
 }
 
 #define warn(format, ...) blog(LOG_WARNING, "%s: " format, "[Vulkan Capture Init]", ##__VA_ARGS__)

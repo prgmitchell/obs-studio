@@ -389,6 +389,17 @@ void OBSApp::InitUserConfigDefaults()
 	config_set_default_bool(App()->GetUserConfig(), "BasicWindow", "MixerShowHidden", false);
 	config_set_default_bool(App()->GetUserConfig(), "BasicWindow", "MixerKeepHiddenLast", false);
 
+	config_set_default_bool(userConfig, "OSD", "Enabled", false);
+	config_set_default_bool(userConfig, "OSD", "ShowStatus", true);
+	config_set_default_bool(userConfig, "OSD", "ShowScenes", true);
+	config_set_default_bool(userConfig, "OSD", "ShowSources", true);
+	config_set_default_bool(userConfig, "OSD", "ShowBackendBadge", true);
+	config_set_default_double(userConfig, "OSD", "Opacity", 0.85);
+	config_set_default_double(userConfig, "OSD", "Scale", 1.0);
+	config_set_default_string(userConfig, "OSD", "Anchor", "top-right");
+	config_set_default_string(userConfig, "OSD", "Backend", "auto");
+	config_set_default_string(userConfig, "OSD", "LayoutMode", "compact");
+
 	config_set_default_int(userConfig, "Appearance", "FontScale", 10);
 	config_set_default_int(userConfig, "Appearance", "Density", 1);
 }

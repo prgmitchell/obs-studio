@@ -23,8 +23,10 @@
 
 #define SHMEM_HOOK_INFO L"CaptureHook_HookInfo"
 #define SHMEM_TEXTURE L"CaptureHook_Texture"
+#define SHMEM_OSD L"CaptureHook_OSD"
 
 #define PIPE_NAME "CaptureHook_Pipe"
+#define OSD_FORMAT_BGRA 1
 
 #pragma pack(push, 8)
 
@@ -76,9 +78,26 @@ struct shtex_data {
 	uint32_t tex_handle;
 };
 
+struct osd_data {
+	volatile uint32_t sequence;
+	uint32_t width;
+	uint32_t height;
+	uint32_t pitch;
+	uint32_t format;
+	uint32_t reserved[3];
+	uint8_t pixels[1];
+};
+
 enum capture_type {
 	CAPTURE_TYPE_MEMORY,
 	CAPTURE_TYPE_TEXTURE,
+};
+
+enum osd_hook_flags {
+	OSD_HOOK_ENABLED = 1 << 0,
+	OSD_HOOK_PREMULTIPLIED_BGRA = 1 << 1,
+	OSD_HOOK_COMPOSITOR_READY = 1 << 2,
+	OSD_HOOK_COMPOSITOR_FAILED = 1 << 3,
 };
 
 struct graphics_offsets {
@@ -115,10 +134,22 @@ struct hook_info {
 	bool capture_overlay;
 	bool allow_srgb_alias;
 
+	/* OBS-owned on-screen display payload.  The frontend writes a
+	 * premultiplied BGRA frame to SHMEM_OSD + osd_map_id when enabled.
+	 * Hook-side graphics compositors should draw it after OBS captures the
+	 * game frame and before the application presents. */
+	uint32_t osd_flags;
+	uint32_t osd_width;
+	uint32_t osd_height;
+	uint32_t osd_pitch;
+	uint32_t osd_map_id;
+	uint32_t osd_sequence;
+	uint32_t osd_anchor;
+
 	/* hook addresses */
 	struct graphics_offsets offsets;
 
-	uint32_t reserved[126];
+	uint32_t reserved[119];
 };
 static_assert(sizeof(struct hook_info) == 648, "ABI compatibility");
 

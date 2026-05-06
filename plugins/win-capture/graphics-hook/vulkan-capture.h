@@ -32,9 +32,16 @@ struct vk_device_funcs {
 	DEF_FUNC(BeginCommandBuffer);
 	DEF_FUNC(EndCommandBuffer);
 	DEF_FUNC(CmdCopyImage);
+	DEF_FUNC(CmdCopyBufferToImage);
 	DEF_FUNC(CmdPipelineBarrier);
 	DEF_FUNC(GetDeviceQueue);
 	DEF_FUNC(QueueSubmit);
+	DEF_FUNC(CreateBuffer);
+	DEF_FUNC(DestroyBuffer);
+	DEF_FUNC(GetBufferMemoryRequirements);
+	DEF_FUNC(BindBufferMemory);
+	DEF_FUNC(MapMemory);
+	DEF_FUNC(UnmapMemory);
 	DEF_FUNC(CreateCommandPool);
 	DEF_FUNC(DestroyCommandPool);
 	DEF_FUNC(AllocateCommandBuffers);

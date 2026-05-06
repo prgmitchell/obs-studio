@@ -7,6 +7,12 @@ endif()
 
 target_link_libraries(obs-studio PRIVATE OBS::qt-vertical-scroll-area)
 
+if(NOT TARGET OBS::hook-config)
+  add_subdirectory("${CMAKE_SOURCE_DIR}/shared/obs-hook-config" "${CMAKE_BINARY_DIR}/shared/obs-hook-config")
+endif()
+
+target_link_libraries(obs-studio PRIVATE OBS::hook-config)
+
 target_sources(
   obs-studio
   PRIVATE
@@ -53,6 +59,8 @@ target_sources(
     widgets/OBSBasicStatusBar.cpp
     widgets/OBSBasicStatusBar.hpp
     widgets/OBSMainWindow.hpp
+    widgets/OBSOSD.cpp
+    widgets/OBSOSD.hpp
     widgets/OBSProjector.cpp
     widgets/OBSProjector.hpp
     widgets/OBSQTDisplay.cpp

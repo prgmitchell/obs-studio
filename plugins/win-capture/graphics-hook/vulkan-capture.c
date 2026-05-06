@@ -16,6 +16,7 @@
 #include "dxgi-helpers.hpp"
 
 #include "vulkan-capture.h"
+#include "vulkan-osd-compositor.h"
 
 /* ======================================================================== */
 /* defs/statics                                                             */
@@ -24,6 +25,7 @@
 #define GET_LDT(x) (*(void **)x)
 
 static bool vulkan_seen = false;
+static PFN_vkQueuePresentKHR last_queue_present = NULL;
 
 /* ======================================================================== */
 /* hook data                                                                */
@@ -54,6 +56,7 @@ struct vk_swap_data {
 	struct shtex_data *shtex_info;
 	ID3D11Texture2D *d3d11_tex;
 	bool captured;
+	bool osd_transfer_dst_supported;
 };
 
 struct vk_queue_data {
@@ -127,6 +130,8 @@ struct vk_data {
 
 	ID3D11Device *d3d11_device;
 	ID3D11DeviceContext *d3d11_context;
+
+	struct vulkan_osd_compositor osd;
 };
 
 __declspec(thread) int vk_presenting = 0;
@@ -237,6 +242,8 @@ static struct vk_data *alloc_device_data(const VkAllocationCallbacks *ac)
 {
 	struct vk_data *data =
 		vk_alloc(ac, sizeof(struct vk_data), _Alignof(struct vk_data), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+	if (data)
+		memset(data, 0, sizeof(*data));
 	return data;
 }
 
@@ -244,6 +251,7 @@ static void init_device_data(struct vk_data *data, VkDevice device)
 {
 	add_obj_data(&devices, (uint64_t)GET_LDT(device), data);
 	data->device = device;
+	vulkan_osd_compositor_init(&data->osd);
 }
 
 static struct vk_data *get_device_data(VkDevice device)
@@ -270,6 +278,9 @@ static void free_device_data(struct vk_data *data, const VkAllocationCallbacks *
 {
 	vk_free(ac, data);
 }
+
+static struct vulkan_osd_compositor_context vk_osd_context(struct vk_data *data);
+static void vk_osd_free(struct vk_data *data);
 
 /* ------------------------------------------------------------------------- */
 
@@ -452,6 +463,7 @@ static void vk_shtex_free(struct vk_data *data)
 	capture_free();
 
 	vk_shtex_wait_until_idle(data);
+	vk_osd_free(data);
 
 	struct vk_swap_data *swap = swap_walk_begin(data);
 
@@ -563,6 +575,40 @@ static void remove_free_inst_data(VkInstance inst, const VkAllocationCallbacks *
 {
 	struct vk_inst_data *idata = (struct vk_inst_data *)remove_obj_data(&instances, (uint64_t)GET_LDT(inst));
 	vk_free(ac, idata);
+}
+
+static void vk_osd_context_base(struct vk_data *data, struct vulkan_osd_compositor_context *ctx)
+{
+	memset(ctx, 0, sizeof(*ctx));
+	ctx->device = data->device;
+	ctx->physical_device = data->phy_device;
+	ctx->alloc = data->ac;
+	ctx->CreateBuffer = data->funcs.CreateBuffer;
+	ctx->DestroyBuffer = data->funcs.DestroyBuffer;
+	ctx->GetBufferMemoryRequirements = data->funcs.GetBufferMemoryRequirements;
+	ctx->AllocateMemory = data->funcs.AllocateMemory;
+	ctx->FreeMemory = data->funcs.FreeMemory;
+	ctx->BindBufferMemory = data->funcs.BindBufferMemory;
+	ctx->MapMemory = data->funcs.MapMemory;
+	ctx->UnmapMemory = data->funcs.UnmapMemory;
+	ctx->CmdPipelineBarrier = data->funcs.CmdPipelineBarrier;
+	ctx->CmdCopyBufferToImage = data->funcs.CmdCopyBufferToImage;
+}
+
+static struct vulkan_osd_compositor_context vk_osd_context(struct vk_data *data)
+{
+	struct vulkan_osd_compositor_context ctx;
+	vk_osd_context_base(data, &ctx);
+	struct vk_inst_funcs *ifuncs = get_inst_funcs_by_physical_device(data->phy_device);
+	ctx.GetPhysicalDeviceMemoryProperties = ifuncs->GetPhysicalDeviceMemoryProperties;
+	return ctx;
+}
+
+static void vk_osd_free(struct vk_data *data)
+{
+	struct vulkan_osd_compositor_context ctx;
+	vk_osd_context_base(data, &ctx);
+	vulkan_osd_compositor_free(&data->osd, &ctx);
 }
 
 /* ======================================================================== */
@@ -957,7 +1003,7 @@ static void vk_shtex_destroy_frame_objects(struct vk_data *data, struct vk_queue
 }
 
 static void vk_shtex_capture(struct vk_data *data, struct vk_device_funcs *funcs, struct vk_swap_data *swap,
-			     uint32_t idx, VkQueue queue, const VkPresentInfoKHR *info)
+			     uint32_t idx, VkQueue queue, const VkPresentInfoKHR *info, bool capture_frame)
 {
 	VkResult res = VK_SUCCESS;
 
@@ -976,6 +1022,16 @@ static void vk_shtex_capture(struct vk_data *data, struct vk_device_funcs *funcs
 
 	const uint32_t image_index = info->pImageIndices[idx];
 	VkImage cur_backbuffer = swap->swap_images[image_index];
+
+	struct vulkan_osd_compositor_context osd_ctx = vk_osd_context(data);
+	struct vulkan_osd_compositor_draw osd_draw = {0};
+	const bool render_osd =
+		vulkan_osd_compositor_prepare(&data->osd, &osd_ctx, swap->format, vk_format_to_str(swap->format),
+					      swap->osd_transfer_dst_supported, swap->image_extent.width,
+					      swap->image_extent.height, &osd_draw);
+
+	if (!capture_frame && !render_osd)
+		return;
 
 	struct vk_queue_data *queue_data = get_queue_data(data, queue);
 	uint32_t fam_idx = queue_data->fam_idx;
@@ -1010,7 +1066,7 @@ static void vk_shtex_capture(struct vk_data *data, struct vk_device_funcs *funcs
 	/* ------------------------------------------------------ */
 	/* transition shared texture if necessary                 */
 
-	if (!swap->layout_initialized) {
+	if (capture_frame && !swap->layout_initialized) {
 		VkImageMemoryBarrier imb;
 		imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 		imb.pNext = NULL;
@@ -1033,92 +1089,127 @@ static void vk_shtex_capture(struct vk_data *data, struct vk_device_funcs *funcs
 		swap->layout_initialized = true;
 	}
 
-	/* ------------------------------------------------------ */
-	/* transition cur_backbuffer to transfer source state     */
+	if (capture_frame) {
+		/* ------------------------------------------------------ */
+		/* transition cur_backbuffer to transfer source state     */
 
-	src_mb->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	src_mb->pNext = NULL;
-	src_mb->srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-	src_mb->dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-	src_mb->oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-	src_mb->newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-	src_mb->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	src_mb->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	src_mb->image = cur_backbuffer;
-	src_mb->subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	src_mb->subresourceRange.baseMipLevel = 0;
-	src_mb->subresourceRange.levelCount = 1;
-	src_mb->subresourceRange.baseArrayLayer = 0;
-	src_mb->subresourceRange.layerCount = 1;
+		src_mb->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		src_mb->pNext = NULL;
+		src_mb->srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+		src_mb->dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+		src_mb->oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+		src_mb->newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+		src_mb->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		src_mb->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		src_mb->image = cur_backbuffer;
+		src_mb->subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		src_mb->subresourceRange.baseMipLevel = 0;
+		src_mb->subresourceRange.levelCount = 1;
+		src_mb->subresourceRange.baseArrayLayer = 0;
+		src_mb->subresourceRange.layerCount = 1;
 
-	/* ------------------------------------------------------ */
-	/* transition exportedTexture to transfer dest state      */
+		/* ------------------------------------------------------ */
+		/* transition exportedTexture to transfer dest state      */
 
-	dst_mb->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	dst_mb->pNext = NULL;
-	dst_mb->srcAccessMask = 0;
-	dst_mb->dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-	dst_mb->oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-	dst_mb->newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-	dst_mb->srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
-	dst_mb->dstQueueFamilyIndex = fam_idx;
-	dst_mb->image = swap->export_image;
-	dst_mb->subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	dst_mb->subresourceRange.baseMipLevel = 0;
-	dst_mb->subresourceRange.levelCount = 1;
-	dst_mb->subresourceRange.baseArrayLayer = 0;
-	dst_mb->subresourceRange.layerCount = 1;
+		dst_mb->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		dst_mb->pNext = NULL;
+		dst_mb->srcAccessMask = 0;
+		dst_mb->dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		dst_mb->oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+		dst_mb->newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		dst_mb->srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+		dst_mb->dstQueueFamilyIndex = fam_idx;
+		dst_mb->image = swap->export_image;
+		dst_mb->subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		dst_mb->subresourceRange.baseMipLevel = 0;
+		dst_mb->subresourceRange.levelCount = 1;
+		dst_mb->subresourceRange.baseArrayLayer = 0;
+		dst_mb->subresourceRange.layerCount = 1;
 
-	funcs->CmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-				  0, NULL, 0, NULL, 2, mb);
+		funcs->CmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+					  VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 2, mb);
 
-	/* ------------------------------------------------------ */
-	/* copy cur_backbuffer's content to our interop image     */
+		/* ------------------------------------------------------ */
+		/* copy cur_backbuffer's content to our interop image     */
 
-	VkImageCopy cpy;
-	cpy.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	cpy.srcSubresource.mipLevel = 0;
-	cpy.srcSubresource.baseArrayLayer = 0;
-	cpy.srcSubresource.layerCount = 1;
-	cpy.srcOffset.x = 0;
-	cpy.srcOffset.y = 0;
-	cpy.srcOffset.z = 0;
-	cpy.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	cpy.dstSubresource.mipLevel = 0;
-	cpy.dstSubresource.baseArrayLayer = 0;
-	cpy.dstSubresource.layerCount = 1;
-	cpy.dstOffset.x = 0;
-	cpy.dstOffset.y = 0;
-	cpy.dstOffset.z = 0;
-	cpy.extent.width = swap->image_extent.width;
-	cpy.extent.height = swap->image_extent.height;
-	cpy.extent.depth = 1;
-	funcs->CmdCopyImage(cmd_buffer, cur_backbuffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swap->export_image,
-			    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cpy);
+		VkImageCopy cpy;
+		cpy.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		cpy.srcSubresource.mipLevel = 0;
+		cpy.srcSubresource.baseArrayLayer = 0;
+		cpy.srcSubresource.layerCount = 1;
+		cpy.srcOffset.x = 0;
+		cpy.srcOffset.y = 0;
+		cpy.srcOffset.z = 0;
+		cpy.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		cpy.dstSubresource.mipLevel = 0;
+		cpy.dstSubresource.baseArrayLayer = 0;
+		cpy.dstSubresource.layerCount = 1;
+		cpy.dstOffset.x = 0;
+		cpy.dstOffset.y = 0;
+		cpy.dstOffset.z = 0;
+		cpy.extent.width = swap->image_extent.width;
+		cpy.extent.height = swap->image_extent.height;
+		cpy.extent.depth = 1;
+		funcs->CmdCopyImage(cmd_buffer, cur_backbuffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				    swap->export_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cpy);
+	}
 
-	/* ------------------------------------------------------ */
-	/* Restore the swap chain image layout to what it was 
-	 * before.  This may not be strictly needed, but it is
-	 * generally good to restore things to their original
-	 * state.  */
+	if (render_osd) {
+		vulkan_osd_compositor_record_copy(&osd_ctx, cmd_buffer, cur_backbuffer, capture_frame, &osd_draw);
+	}
 
-	src_mb->srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-	src_mb->dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-	src_mb->oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-	src_mb->newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	if (capture_frame || render_osd) {
+		/* ------------------------------------------------------ */
+		/* Restore the swap chain image layout to what it was
+		 * before.  This may not be strictly needed, but it is
+		 * generally good to restore things to their original
+		 * state.  */
 
-	dst_mb->srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-	dst_mb->dstAccessMask = 0;
-	dst_mb->oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-	dst_mb->newLayout = VK_IMAGE_LAYOUT_GENERAL;
-	dst_mb->srcQueueFamilyIndex = fam_idx;
-	dst_mb->dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+		src_mb->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		src_mb->pNext = NULL;
+		src_mb->srcAccessMask = render_osd ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_TRANSFER_READ_BIT;
+		src_mb->dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+		src_mb->oldLayout = render_osd ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+					       : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+		src_mb->newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+		src_mb->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		src_mb->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		src_mb->image = cur_backbuffer;
+		src_mb->subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		src_mb->subresourceRange.baseMipLevel = 0;
+		src_mb->subresourceRange.levelCount = 1;
+		src_mb->subresourceRange.baseArrayLayer = 0;
+		src_mb->subresourceRange.layerCount = 1;
 
-	funcs->CmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-				  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL,
-				  0, NULL, 2, mb);
+		if (capture_frame) {
+			dst_mb->srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			dst_mb->dstAccessMask = 0;
+			dst_mb->oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			dst_mb->newLayout = VK_IMAGE_LAYOUT_GENERAL;
+			dst_mb->srcQueueFamilyIndex = fam_idx;
+			dst_mb->dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
 
-	funcs->EndCommandBuffer(cmd_buffer);
+			funcs->CmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+						  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT |
+							  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+						  0, 0, NULL, 0, NULL, 2, mb);
+		} else {
+			funcs->CmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+						  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT |
+							  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+						  0, 0, NULL, 0, NULL, 1, src_mb);
+		}
+	}
+
+	res = funcs->EndCommandBuffer(cmd_buffer);
+	if (res != VK_SUCCESS) {
+		if (render_osd) {
+			data->osd.state = VULKAN_OSD_COMPOSITOR_STATE_COPY_FAILED;
+			osd_mark_failed();
+			hlog("vk_shtex_capture: EndCommandBuffer failed after OSD copy record: %s", result_to_str(res));
+		}
+		return;
+	}
 
 	/* ------------------------------------------------------ */
 
@@ -1140,8 +1231,17 @@ static void vk_shtex_capture(struct vk_data *data, struct vk_device_funcs *funcs
 	debug_res("QueueSubmit", res);
 #endif
 
-	if (res == VK_SUCCESS)
+	if (res == VK_SUCCESS) {
 		frame_data->cmd_buffer_busy = true;
+		if (render_osd) {
+			data->osd.state = VULKAN_OSD_COMPOSITOR_STATE_READY;
+			osd_mark_ready();
+		}
+	} else if (render_osd) {
+		data->osd.state = VULKAN_OSD_COMPOSITOR_STATE_COPY_FAILED;
+		osd_mark_failed();
+		hlog("vk_shtex_capture: QueueSubmit failed after OSD copy record: %s", result_to_str(res));
+	}
 }
 
 static inline bool valid_rect(struct vk_swap_data *swap)
@@ -1149,11 +1249,53 @@ static inline bool valid_rect(struct vk_swap_data *swap)
 	return !!swap->image_extent.width && !!swap->image_extent.height;
 }
 
-static void vk_capture(struct vk_data *data, VkQueue queue, const VkPresentInfoKHR *info)
+#if HOOK_VERBOSE_LOGGING
+static bool vk_osd_should_log_present(struct vk_data *data)
+{
+	const uint64_t now = os_gettime_ns();
+	if (data->osd.present_log_count < 8) {
+		data->osd.present_log_count++;
+		data->osd.last_present_log_time = now;
+		return true;
+	}
+
+	if (now - data->osd.last_present_log_time >= 2000000000ULL) {
+		data->osd.last_present_log_time = now;
+		return true;
+	}
+
+	return false;
+}
+
+static void vk_osd_log_present_state(struct vk_data *data, struct vk_queue_data *queue_data, struct vk_swap_data *swap,
+				     bool swap_match, bool queue_known, bool capture_ready_state)
+{
+	if (!vk_osd_should_log_present(data))
+		return;
+
+	hlog("vk_osd_present: state=%s hook_info=%p flags=0x%08x map=%u seq=%u active=%s ready=%s queue_known=%s "
+	     "queue_transfer=%s swap_match=%s swap=%p cur_swap=%p format=%s extent=%ux%u transfer_dst=%s",
+	     vulkan_osd_compositor_state_name(data->osd.state), global_hook_info,
+	     global_hook_info ? global_hook_info->osd_flags : 0,
+	     global_hook_info ? global_hook_info->osd_map_id : 0, global_hook_info ? global_hook_info->osd_sequence : 0,
+	     capture_active() ? "true" : "false", capture_ready_state ? "true" : "false",
+	     queue_known ? "true" : "false",
+	     queue_data && queue_data->supports_transfer ? "true" : "false", swap_match ? "true" : "false", swap,
+	     data->cur_swap, swap ? vk_format_to_str(swap->format) : "none",
+	     swap ? swap->image_extent.width : 0, swap ? swap->image_extent.height : 0,
+	     swap && swap->osd_transfer_dst_supported ? "true" : "false");
+}
+#else
+#define vk_osd_log_present_state(...) (void)0
+#endif
+
+static void vk_capture(struct vk_data *data, struct vk_queue_data *queue_data, VkQueue queue, const VkPresentInfoKHR *info)
 {
 	struct vk_swap_data *swap = NULL;
 	HWND window = NULL;
 	uint32_t idx = 0;
+	const bool osd_enabled = (global_hook_info->osd_flags & OSD_HOOK_ENABLED) != 0;
+	bool capture_frame = false;
 
 #ifdef MORE_DEBUGGING
 	debug("QueuePresentKHR called on "
@@ -1174,6 +1316,9 @@ static void vk_capture(struct vk_data *data, VkQueue queue, const VkPresentInfoK
 	}
 
 	if (!window) {
+		vk_osd_log_present_state(data, queue_data, NULL, false, true, false);
+		if (osd_enabled)
+			hlog_verbose("vk_capture: OSD enabled but no window-backed swapchain was found");
 		return;
 	}
 
@@ -1187,24 +1332,54 @@ static void vk_capture(struct vk_data *data, VkQueue queue, const VkPresentInfoK
 			flog("vk_shtex_init failed");
 		}
 	}
-	if (capture_ready()) {
+	capture_frame = capture_ready();
+	vk_osd_log_present_state(data, queue_data, swap, swap == data->cur_swap, true, capture_frame);
+
+	if (capture_active()) {
 		if (swap != data->cur_swap) {
+			if (osd_enabled)
+				hlog_verbose("vk_capture: OSD enabled but present swap changed; freeing capture");
 			vk_shtex_free(data);
 			return;
 		}
 
-		vk_shtex_capture(data, &data->funcs, swap, idx, queue, info);
+		vk_shtex_capture(data, &data->funcs, swap, idx, queue, info, capture_frame);
+	} else if (osd_enabled) {
+		hlog_verbose("vk_capture: OSD enabled but capture is not active yet flags=0x%08x map=%u seq=%u",
+		     global_hook_info->osd_flags, global_hook_info->osd_map_id, global_hook_info->osd_sequence);
 	}
 }
 
 static VkResult VKAPI_CALL OBS_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *info)
 {
 	struct vk_data *const data = get_device_data_by_queue(queue);
+	if (!data) {
+		hlog_verbose("OBS_QueuePresentKHR: present queue has no device data; forwarding=%s hook_info=%p flags=0x%08x",
+			      last_queue_present ? "true" : "false", global_hook_info,
+			      global_hook_info ? global_hook_info->osd_flags : 0);
+		if (last_queue_present)
+			return last_queue_present(queue, info);
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
+
 	struct vk_queue_data *const queue_data = get_queue_data(data, queue);
 	struct vk_device_funcs *const funcs = &data->funcs;
+	const bool osd_enabled = (global_hook_info->osd_flags & OSD_HOOK_ENABLED) != 0;
 
-	if (data->valid && queue_data->supports_transfer) {
-		vk_capture(data, queue, info);
+	if (data->valid && queue_data) {
+		if (queue_data->supports_transfer) {
+			vk_capture(data, queue_data, queue, info);
+		} else if (osd_enabled &&
+			   data->osd.state != VULKAN_OSD_COMPOSITOR_STATE_UNSUPPORTED_SWAPCHAIN_USAGE) {
+			osd_mark_failed();
+			data->osd.state = VULKAN_OSD_COMPOSITOR_STATE_UNSUPPORTED_SWAPCHAIN_USAGE;
+			vk_osd_log_present_state(data, queue_data, NULL, false, true, false);
+			hlog("OBS_QueuePresentKHR: OSD enabled but present queue has no transfer support");
+		}
+	} else if (osd_enabled && data->valid) {
+		osd_mark_failed();
+		vk_osd_log_present_state(data, queue_data, NULL, false, false, false);
+		hlog_verbose("OBS_QueuePresentKHR: OSD enabled but present queue is unknown");
 	}
 
 	if (vk_presenting != 0) {
@@ -1480,9 +1655,16 @@ static VkResult VKAPI_CALL OBS_CreateDevice(VkPhysicalDevice phy_device, const V
 	GETADDR(BeginCommandBuffer);
 	GETADDR(EndCommandBuffer);
 	GETADDR(CmdCopyImage);
+	GETADDR(CmdCopyBufferToImage);
 	GETADDR(CmdPipelineBarrier);
 	GETADDR(GetDeviceQueue);
 	GETADDR(QueueSubmit);
+	GETADDR(CreateBuffer);
+	GETADDR(DestroyBuffer);
+	GETADDR(GetBufferMemoryRequirements);
+	GETADDR(BindBufferMemory);
+	GETADDR(MapMemory);
+	GETADDR(UnmapMemory);
 	GETADDR(CreateCommandPool);
 	GETADDR(DestroyCommandPool);
 	GETADDR(AllocateCommandBuffers);
@@ -1503,6 +1685,7 @@ static VkResult VKAPI_CALL OBS_CreateDevice(VkPhysicalDevice phy_device, const V
 	if (!funcs_found) {
 		goto fail;
 	}
+	last_queue_present = dfuncs->QueuePresentKHR;
 
 	if (!idata->valid) {
 		flog("instance not valid");
@@ -1630,11 +1813,12 @@ static VkResult VKAPI_CALL OBS_CreateSwapchainKHR(VkDevice device, const VkSwapc
 		return funcs->CreateSwapchainKHR(device, cinfo, ac, p_sc);
 
 	VkSwapchainCreateInfoKHR info = *cinfo;
-	info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 	VkResult res = funcs->CreateSwapchainKHR(device, &info, ac, p_sc);
 	debug_res("CreateSwapchainKHR", res);
 	if (res != VK_SUCCESS) {
 		/* try again with original imageUsage flags */
+		hlog("CreateSwapchainKHR with transfer dst usage failed; Vulkan OSD hook will be unavailable");
 		return funcs->CreateSwapchainKHR(device, cinfo, ac, p_sc);
 	}
 
@@ -1663,6 +1847,7 @@ static VkResult VKAPI_CALL OBS_CreateSwapchainKHR(VkDevice device, const VkSwapc
 				swap_data->shtex_info = NULL;
 				swap_data->d3d11_tex = NULL;
 				swap_data->captured = false;
+				swap_data->osd_transfer_dst_supported = (info.imageUsage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0;
 				init_swap_data(swap_data, data, sc);
 			}
 		}

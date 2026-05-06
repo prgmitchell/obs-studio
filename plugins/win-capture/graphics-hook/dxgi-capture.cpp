@@ -212,6 +212,7 @@ static HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain *swap, UINT sync_in
 
 		if (backbuffer) {
 			data.capture(swap, backbuffer);
+			d3d11_render_osd(swap, backbuffer);
 			backbuffer->Release();
 		}
 	}
@@ -274,6 +275,7 @@ static HRESULT STDMETHODCALLTYPE hook_present1(IDXGISwapChain1 *swap, UINT sync_
 
 		if (backbuffer) {
 			data.capture(swap, backbuffer);
+			d3d11_render_osd(swap, backbuffer);
 			backbuffer->Release();
 		}
 	}

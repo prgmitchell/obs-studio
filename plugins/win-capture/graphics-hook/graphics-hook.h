@@ -13,6 +13,8 @@
 #include <ipc-util/pipe.h>
 #include <psapi.h>
 
+#include "osd-common.h"
+
 #ifdef __cplusplus
 extern "C" {
 #else
@@ -62,6 +64,7 @@ extern bool hook_vulkan(void);
 extern void d3d10_capture(void *swap, void *backbuffer);
 extern void d3d10_free(void);
 extern void d3d11_capture(void *swap, void *backbuffer);
+extern void d3d11_render_osd(void *swap, void *backbuffer);
 extern void d3d11_free(void);
 
 #ifdef COMPILE_D3D12_HOOK

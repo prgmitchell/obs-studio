@@ -530,6 +530,26 @@ static void game_capture_get_hooked(void *data, calldata_t *cd)
 	}
 }
 
+static void game_capture_get_hooked_pid(void *data, calldata_t *cd)
+{
+	struct game_capture *gc = data;
+	if (!gc)
+		return;
+
+	calldata_set_bool(cd, "hooked", gc->capturing);
+	calldata_set_int(cd, "process_id", gc->capturing ? gc->process_id : 0);
+
+	if (gc->capturing) {
+		calldata_set_string(cd, "title", gc->title.array);
+		calldata_set_string(cd, "class", gc->class.array);
+		calldata_set_string(cd, "executable", gc->executable.array);
+	} else {
+		calldata_set_string(cd, "title", "");
+		calldata_set_string(cd, "class", "");
+		calldata_set_string(cd, "executable", "");
+	}
+}
+
 static void game_capture_update(void *data, obs_data_t *settings)
 {
 	struct game_capture *gc = data;
@@ -616,6 +636,9 @@ static void *game_capture_create(obs_data_t *settings, obs_source_t *source)
 	proc_handler_add(ph,
 			 "void get_hooked(out bool hooked, out string title, out string class, out string executable)",
 			 game_capture_get_hooked, gc);
+	proc_handler_add(ph,
+			 "void get_hooked_pid(out bool hooked, out int process_id, out string title, out string class, out string executable)",
+			 game_capture_get_hooked_pid, gc);
 
 	signal_handler_connect(sh, "rename", rename_audio_source, &gc->audio_source);
 
@@ -798,6 +821,13 @@ static inline bool init_hook_info(struct game_capture *gc)
 	gc->global_hook_info->force_shmem = gc->config.force_shmem;
 	gc->global_hook_info->UNUSED_use_scale = false;
 	gc->global_hook_info->allow_srgb_alias = true;
+	gc->global_hook_info->osd_flags = 0;
+	gc->global_hook_info->osd_width = 0;
+	gc->global_hook_info->osd_height = 0;
+	gc->global_hook_info->osd_pitch = 0;
+	gc->global_hook_info->osd_map_id = 0;
+	gc->global_hook_info->osd_sequence = 0;
+	gc->global_hook_info->osd_anchor = 0;
 	reset_frame_interval(gc);
 
 	obs_enter_graphics();

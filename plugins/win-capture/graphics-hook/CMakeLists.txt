@@ -27,6 +27,8 @@ target_sources(
   PRIVATE
     d3d10-capture.cpp
     d3d11-capture.cpp
+    d3d11-osd-compositor.cpp
+    d3d11-osd-compositor.hpp
     d3d12-capture.cpp
     d3d8-capture.cpp
     d3d9-capture.cpp
@@ -37,6 +39,8 @@ target_sources(
     graphics-hook.c
     graphics-hook.h
     graphics-hook.rc
+    osd-common.c
+    osd-common.h
 )
 
 target_compile_definitions(graphics-hook PRIVATE COMPILE_D3D12_HOOK)
@@ -49,7 +53,7 @@ target_link_libraries(
 target_link_options(graphics-hook PRIVATE /IGNORE:4099)
 
 if(TARGET Vulkan::Vulkan)
-  target_sources(graphics-hook PRIVATE vulkan-capture.c vulkan-capture.h)
+  target_sources(graphics-hook PRIVATE vulkan-capture.c vulkan-capture.h vulkan-osd-compositor.c vulkan-osd-compositor.h)
   target_link_libraries(graphics-hook PRIVATE Vulkan::Vulkan)
   target_compile_definitions(graphics-hook PRIVATE COMPILE_VULKAN_HOOK)
 endif()

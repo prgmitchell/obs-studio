@@ -159,6 +159,7 @@ static inline bool init_system_path(void)
 static inline void log_current_process(void)
 {
 	DWORD len = GetModuleBaseNameA(GetCurrentProcess(), NULL, process_name, MAX_PATH);
+
 	if (len > 0) {
 		process_name[len] = 0;
 		hlog("graphics-hook.dll loaded against process: %s", process_name);

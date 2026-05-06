@@ -1,6 +1,8 @@
 #include <d3d11.h>
 #include <dxgi.h>
+#include <stddef.h>
 
+#include "d3d11-osd-compositor.hpp"
 #include "dxgi-helpers.hpp"
 #include "graphics-hook.h"
 
@@ -34,9 +36,11 @@ struct d3d11_data {
 };
 
 static struct d3d11_data data = {};
+static struct d3d11_osd_compositor osd = {};
 
 void d3d11_free(void)
 {
+	d3d11_osd_compositor_free(&osd);
 	capture_free();
 
 	if (data.using_shtex) {
@@ -55,6 +59,24 @@ void d3d11_free(void)
 	memset(&data, 0, sizeof(data));
 
 	hlog("----------------- d3d11 capture freed ----------------");
+}
+
+void d3d11_render_osd(void *, void *backbuffer_ptr)
+{
+	if (!data.device || !data.context || !(global_hook_info->osd_flags & OSD_HOOK_ENABLED))
+		return;
+
+	ID3D11Resource *backbuffer = nullptr;
+	HRESULT hr = ((IUnknown *)backbuffer_ptr)->QueryInterface(__uuidof(ID3D11Resource), (void **)&backbuffer);
+	if (FAILED(hr)) {
+		global_hook_info->osd_flags |= OSD_HOOK_COMPOSITOR_FAILED;
+		hlog_hr("d3d11_render_osd: failed to query backbuffer resource", hr);
+		return;
+	}
+
+	d3d11_osd_compositor_render(&osd, data.device, data.context, backbuffer, data.cx, data.cy, data.format, true,
+				    "d3d11_render_osd");
+	backbuffer->Release();
 }
 
 static bool create_d3d11_stage_surface(ID3D11Texture2D **tex)

@@ -23,6 +23,7 @@
 #include "ColorSelect.hpp"
 #include "OBSBasicControls.hpp"
 #include "OBSBasicStats.hpp"
+#include "OBSOSD.hpp"
 #include "plugin-manager/PluginManager.hpp"
 
 #include <obs-module.h>
@@ -1284,6 +1285,7 @@ void OBSBasic::OBSInit()
 		on_stats_triggered();
 
 	OBSBasicStats::InitializeValues();
+	osdController = std::make_unique<OBSOSDController>(this);
 
 	/* ----------------------- */
 	/* Add multiview menu      */
@@ -1421,6 +1423,7 @@ void OBSBasic::applicationShutdown() noexcept
 	delete shortcutFilter;
 	delete programOptions;
 	delete program;
+	osdController.reset();
 
 	/* XXX: any obs data must be released before calling obs_shutdown.
 	 * currently, we can't automate this with C++ RAII because of the
@@ -2149,6 +2152,15 @@ void OBSBasic::OnEvent(enum obs_frontend_event event)
 {
 	if (api)
 		api->on_event(event);
+
+	if (osdController)
+		osdController->HandleFrontendEvent(event);
+}
+
+void OBSBasic::ReloadOSDSettings()
+{
+	if (osdController)
+		osdController->ReloadSettings();
 }
 
 OBSPromptResult OBSBasic::PromptForName(const OBSPromptRequest &request, const OBSPromptCallback &callback)

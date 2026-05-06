@@ -42,6 +42,18 @@
 #include <qt-wrappers.hpp>
 
 #include <QCompleter>
+#include <QAbstractButton>
+#include <QDoubleSpinBox>
+#include <QFormLayout>
+#include <QGridLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QListWidgetItem>
+#include <QScrollArea>
+#include <QSignalBlocker>
+#include <QSlider>
+#include <QVBoxLayout>
 #include <QStandardItemModel>
 
 #include <sstream>
@@ -200,6 +212,125 @@ static int FindClosestAvailableAudioBitrate(QComboBox *box, int bitrate)
 }
 #undef INVALID_BITRATE
 
+static QWidget *CreateOSDSliderRow(QSlider *slider, QLabel *valueLabel, QWidget *parent)
+{
+	valueLabel->setMinimumWidth(44);
+	valueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+	auto *row = new QWidget(parent);
+	auto *layout = new QHBoxLayout(row);
+	layout->setContentsMargins(0, 0, 0, 0);
+	layout->addWidget(slider);
+	layout->addWidget(valueLabel);
+	return row;
+}
+
+void OBSBasicSettings::InitOSDSettingsPage()
+{
+	auto *page = new QWidget(ui->settingsPages);
+	auto *pageLayout = new QVBoxLayout(page);
+	pageLayout->setContentsMargins(9, 0, 0, 0);
+
+	auto *scrollArea = new QScrollArea(page);
+	scrollArea->setFrameShape(QFrame::NoFrame);
+	scrollArea->setFrameShadow(QFrame::Plain);
+	scrollArea->setLineWidth(0);
+	scrollArea->setWidgetResizable(true);
+
+	auto *contents = new QWidget(scrollArea);
+	auto *contentsLayout = new QVBoxLayout(contents);
+	contentsLayout->setContentsMargins(0, 0, 0, 0);
+
+	auto *generalGroup = new QGroupBox(QStringLiteral("On-Screen Display"), contents);
+	auto *generalLayout = new QVBoxLayout(generalGroup);
+	generalLayout->setContentsMargins(10, 16, 10, 10);
+
+	auto *modulesGroup = new QGroupBox(QStringLiteral("Content"), contents);
+	auto *modulesLayout = new QGridLayout(modulesGroup);
+	modulesLayout->setContentsMargins(10, 16, 10, 10);
+	modulesLayout->setHorizontalSpacing(28);
+	modulesLayout->setVerticalSpacing(8);
+
+	auto *appearanceGroup = new QGroupBox(QStringLiteral("Appearance"), contents);
+	auto *appearanceForm = new QFormLayout(appearanceGroup);
+	appearanceForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+	appearanceForm->setContentsMargins(10, 16, 10, 10);
+	appearanceForm->setVerticalSpacing(10);
+
+	auto *placementGroup = new QGroupBox(QStringLiteral("Placement"), contents);
+	auto *placementForm = new QFormLayout(placementGroup);
+	placementForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+	placementForm->setContentsMargins(10, 16, 10, 10);
+	placementForm->setVerticalSpacing(10);
+
+	osdEnabled = new QCheckBox(QStringLiteral("Enable OBS on-screen display"), generalGroup);
+	osdShowStatus = new QCheckBox(QStringLiteral("Status indicators"), modulesGroup);
+	osdShowScenes = new QCheckBox(QStringLiteral("Current scene"), modulesGroup);
+	osdShowSources = new QCheckBox(QStringLiteral("Source list"), modulesGroup);
+	osdShowBackendBadge = new QCheckBox(QStringLiteral("Backend indicator"), modulesGroup);
+
+	osdOpacity = new QSlider(Qt::Horizontal, appearanceGroup);
+	osdOpacity->setRange(20, 100);
+	osdOpacity->setSingleStep(5);
+	osdOpacity->setPageStep(10);
+	osdOpacityValue = new QLabel(appearanceGroup);
+
+	osdScale = new QSlider(Qt::Horizontal, appearanceGroup);
+	osdScale->setRange(50, 200);
+	osdScale->setSingleStep(5);
+	osdScale->setPageStep(10);
+	osdScaleValue = new QLabel(appearanceGroup);
+
+	auto *opacityRow = CreateOSDSliderRow(osdOpacity, osdOpacityValue, appearanceGroup);
+	auto *scaleRow = CreateOSDSliderRow(osdScale, osdScaleValue, appearanceGroup);
+
+	osdAnchor = new QComboBox(placementGroup);
+	osdAnchor->addItem(QStringLiteral("Top right"), QStringLiteral("top-right"));
+	osdAnchor->addItem(QStringLiteral("Top left"), QStringLiteral("top-left"));
+	osdAnchor->addItem(QStringLiteral("Bottom right"), QStringLiteral("bottom-right"));
+	osdAnchor->addItem(QStringLiteral("Bottom left"), QStringLiteral("bottom-left"));
+
+	osdBackend = new QComboBox(placementGroup);
+	osdBackend->addItem(QStringLiteral("Auto"), QStringLiteral("auto"));
+	osdBackend->addItem(QStringLiteral("Topmost window"), QStringLiteral("window"));
+	osdBackend->addItem(QStringLiteral("Game capture hook"), QStringLiteral("hook"));
+
+	osdLayoutMode = new QComboBox(appearanceGroup);
+	osdLayoutMode->addItem(QStringLiteral("Compact"), QStringLiteral("compact"));
+	osdLayoutMode->addItem(QStringLiteral("Expanded"), QStringLiteral("expanded"));
+	osdLayoutMode->addItem(QStringLiteral("Collapsed"), QStringLiteral("collapsed"));
+
+	auto updateOpacityLabel = [this](int value) { osdOpacityValue->setText(QString::number(value / 100.0, 'f', 2)); };
+	auto updateScaleLabel = [this](int value) { osdScaleValue->setText(QString::number(value / 100.0, 'f', 2)); };
+	connect(osdOpacity, &QSlider::valueChanged, this, updateOpacityLabel);
+	connect(osdScale, &QSlider::valueChanged, this, updateScaleLabel);
+
+	generalLayout->addWidget(osdEnabled);
+	modulesLayout->addWidget(osdShowStatus, 0, 0);
+	modulesLayout->addWidget(osdShowScenes, 0, 1);
+	modulesLayout->addWidget(osdShowSources, 1, 0);
+	modulesLayout->addWidget(osdShowBackendBadge, 1, 1);
+	appearanceForm->addRow(QStringLiteral("Layout"), osdLayoutMode);
+	appearanceForm->addRow(QStringLiteral("Opacity"), opacityRow);
+	appearanceForm->addRow(QStringLiteral("Scale"), scaleRow);
+	placementForm->addRow(QStringLiteral("Anchor"), osdAnchor);
+	placementForm->addRow(QStringLiteral("Type"), osdBackend);
+
+	contentsLayout->addWidget(generalGroup);
+	contentsLayout->addWidget(modulesGroup);
+	contentsLayout->addWidget(appearanceGroup);
+	contentsLayout->addWidget(placementGroup);
+	contentsLayout->addStretch();
+
+	scrollArea->setWidget(contents);
+	pageLayout->addWidget(scrollArea);
+
+	auto *item =
+		new QListWidgetItem(ui->listWidget->item(Pages::VIDEO - 1)->icon(), QStringLiteral("On-Screen Display"));
+	ui->listWidget->insertItem(Pages::OSD, item);
+	ui->settingsPages->insertWidget(Pages::OSD, page);
+}
+
 static void PopulateSimpleBitrates(QComboBox *box, bool opus)
 {
 	auto &bitrateMap = opus ? GetSimpleOpusEncoderBitrateMap() : GetSimpleAACEncoderBitrateMap();
@@ -308,6 +439,7 @@ void RestrictResetBitrates(initializer_list<QComboBox *> boxes, int maxbitrate);
 #define VIDEO_CHANGED   &OBSBasicSettings::VideoChanged
 #define A11Y_CHANGED    &OBSBasicSettings::A11yChanged
 #define APPEAR_CHANGED  &OBSBasicSettings::AppearanceChanged
+#define OSD_CHANGED     &OBSBasicSettings::OSDChanged
 #define ADV_CHANGED     &OBSBasicSettings::AdvancedChanged
 #define ADV_RESTART     &OBSBasicSettings::AdvancedChangedRestart
 /* clang-format on */
@@ -324,6 +456,7 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
 	ui->setupUi(this);
+	InitOSDSettingsPage();
 
 	main->EnableOutputs(false);
 
@@ -367,6 +500,16 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->multiviewDrawNames,   CHECK_CHANGED,  GENERAL_CHANGED);
 	HookWidget(ui->multiviewDrawAreas,   CHECK_CHANGED,  GENERAL_CHANGED);
 	HookWidget(ui->multiviewLayout,      COMBO_CHANGED,  GENERAL_CHANGED);
+	HookWidget(osdEnabled.data(),        CHECK_CHANGED,  OSD_CHANGED);
+	HookWidget(osdShowStatus.data(),     CHECK_CHANGED,  OSD_CHANGED);
+	HookWidget(osdShowScenes.data(),     CHECK_CHANGED,  OSD_CHANGED);
+	HookWidget(osdShowSources.data(),    CHECK_CHANGED,  OSD_CHANGED);
+	HookWidget(osdShowBackendBadge.data(), CHECK_CHANGED, OSD_CHANGED);
+	HookWidget(osdOpacity.data(),        SLIDER_CHANGED, OSD_CHANGED);
+	HookWidget(osdScale.data(),          SLIDER_CHANGED, OSD_CHANGED);
+	HookWidget(osdAnchor.data(),         COMBO_CHANGED,  OSD_CHANGED);
+	HookWidget(osdBackend.data(),        COMBO_CHANGED,  OSD_CHANGED);
+	HookWidget(osdLayoutMode.data(),     COMBO_CHANGED,  OSD_CHANGED);
 	HookWidget(ui->theme, 		     COMBO_CHANGED,  APPEAR_CHANGED);
 	HookWidget(ui->themeVariant,	     COMBO_CHANGED,  APPEAR_CHANGED);
 	HookWidget(ui->appearanceFontScale,  SLIDER_CHANGED, APPEAR_CHANGED);
@@ -1390,6 +1533,34 @@ void OBSBasicSettings::LoadGeneralSettings()
 		ui->language->setEnabled(false);
 
 	loading = false;
+}
+
+void OBSBasicSettings::LoadOSDSettings()
+{
+	config_t *config = App()->GetUserConfig();
+	const QSignalBlocker enabledBlocker(osdEnabled);
+	const QSignalBlocker statusBlocker(osdShowStatus);
+	const QSignalBlocker scenesBlocker(osdShowScenes);
+	const QSignalBlocker sourcesBlocker(osdShowSources);
+	const QSignalBlocker backendBadgeBlocker(osdShowBackendBadge);
+	const QSignalBlocker opacityBlocker(osdOpacity);
+	const QSignalBlocker scaleBlocker(osdScale);
+	const QSignalBlocker anchorBlocker(osdAnchor);
+	const QSignalBlocker backendBlocker(osdBackend);
+	const QSignalBlocker layoutBlocker(osdLayoutMode);
+
+	osdEnabled->setChecked(config_get_bool(config, "OSD", "Enabled"));
+	osdShowStatus->setChecked(config_get_bool(config, "OSD", "ShowStatus"));
+	osdShowScenes->setChecked(config_get_bool(config, "OSD", "ShowScenes"));
+	osdShowSources->setChecked(config_get_bool(config, "OSD", "ShowSources"));
+	osdShowBackendBadge->setChecked(config_get_bool(config, "OSD", "ShowBackendBadge"));
+	osdOpacity->setValue(qRound(config_get_double(config, "OSD", "Opacity") * 100.0));
+	osdScale->setValue(qRound(config_get_double(config, "OSD", "Scale") * 100.0));
+	osdOpacityValue->setText(QString::number(osdOpacity->value() / 100.0, 'f', 2));
+	osdScaleValue->setText(QString::number(osdScale->value() / 100.0, 'f', 2));
+	osdAnchor->setCurrentIndex(osdAnchor->findData(config_get_string(config, "OSD", "Anchor")));
+	osdBackend->setCurrentIndex(osdBackend->findData(config_get_string(config, "OSD", "Backend")));
+	osdLayoutMode->setCurrentIndex(osdLayoutMode->findData(config_get_string(config, "OSD", "LayoutMode")));
 }
 
 void OBSBasicSettings::LoadRendererList()
@@ -2913,6 +3084,8 @@ void OBSBasicSettings::LoadSettings(bool changedOnly)
 {
 	if (!changedOnly || generalChanged)
 		LoadGeneralSettings();
+	if (!changedOnly || osdChanged)
+		LoadOSDSettings();
 	if (!changedOnly || stream1Changed)
 		LoadStream1Settings();
 	if (!changedOnly || outputsChanged)
@@ -3110,6 +3283,46 @@ void OBSBasicSettings::SaveGeneralSettings()
 
 	if (multiviewChanged)
 		OBSProjector::UpdateMultiviewProjectors();
+
+}
+
+void OBSBasicSettings::SaveOSDSettings()
+{
+	config_t *config = App()->GetUserConfig();
+	bool changed = false;
+
+	auto saveBool = [&](QAbstractButton *widget, const char *name) {
+		if (WidgetChanged(widget)) {
+			config_set_bool(config, "OSD", name, widget->isChecked());
+			changed = true;
+		}
+	};
+	auto saveSliderDouble = [&](QSlider *widget, const char *name) {
+		if (WidgetChanged(widget)) {
+			config_set_double(config, "OSD", name, widget->value() / 100.0);
+			changed = true;
+		}
+	};
+	auto saveCombo = [&](QComboBox *widget, const char *name) {
+		if (WidgetChanged(widget)) {
+			config_set_string(config, "OSD", name, QT_TO_UTF8(widget->currentData().toString()));
+			changed = true;
+		}
+	};
+
+	saveBool(osdEnabled, "Enabled");
+	saveBool(osdShowStatus, "ShowStatus");
+	saveBool(osdShowScenes, "ShowScenes");
+	saveBool(osdShowSources, "ShowSources");
+	saveBool(osdShowBackendBadge, "ShowBackendBadge");
+	saveSliderDouble(osdOpacity, "Opacity");
+	saveSliderDouble(osdScale, "Scale");
+	saveCombo(osdLayoutMode, "LayoutMode");
+	saveCombo(osdAnchor, "Anchor");
+	saveCombo(osdBackend, "Backend");
+
+	if (changed)
+		main->ReloadOSDSettings();
 }
 
 void OBSBasicSettings::SaveVideoSettings()
@@ -3625,6 +3838,8 @@ void OBSBasicSettings::SaveSettings()
 {
 	if (generalChanged)
 		SaveGeneralSettings();
+	if (osdChanged)
+		SaveOSDSettings();
 	if (stream1Changed)
 		SaveStream1Settings();
 	if (outputsChanged)
@@ -3666,6 +3881,8 @@ void OBSBasicSettings::SaveSettings()
 			AddChangedVal(changed, "a11y");
 		if (appearanceChanged)
 			AddChangedVal(changed, "appearance");
+		if (osdChanged)
+			AddChangedVal(changed, "on-screen display");
 		if (advancedChanged)
 			AddChangedVal(changed, "advanced");
 
@@ -4451,6 +4668,15 @@ void OBSBasicSettings::AppearanceChanged()
 {
 	if (!loading) {
 		appearanceChanged = true;
+		sender()->setProperty("changed", QVariant(true));
+		EnableApplyButton(true);
+	}
+}
+
+void OBSBasicSettings::OSDChanged()
+{
+	if (!loading) {
+		osdChanged = true;
 		sender()->setProperty("changed", QVariant(true));
 		EnableApplyButton(true);
 	}
@@ -5480,6 +5706,8 @@ void OBSBasicSettings::SetAudioIcon(const QIcon &icon)
 void OBSBasicSettings::SetVideoIcon(const QIcon &icon)
 {
 	ui->listWidget->item(Pages::VIDEO)->setIcon(icon);
+	if (ui->listWidget->count() == Pages::NUM_PAGES)
+		ui->listWidget->item(Pages::OSD)->setIcon(icon);
 }
 
 void OBSBasicSettings::SetHotkeysIcon(const QIcon &icon)

@@ -32,6 +32,8 @@ class Auth;
 class OBSBasic;
 class OBSHotkeyWidget;
 class OBSPropertiesView;
+class QLabel;
+class QSlider;
 struct FFmpegFormat;
 struct OBSTheme;
 
@@ -49,7 +51,7 @@ class OBSBasicSettings : public QDialog {
 	Q_PROPERTY(QIcon accessibilityIcon READ GetAccessibilityIcon WRITE SetAccessibilityIcon DESIGNABLE true)
 	Q_PROPERTY(QIcon advancedIcon READ GetAdvancedIcon WRITE SetAdvancedIcon DESIGNABLE true)
 
-	enum Pages { GENERAL, APPEARANCE, STREAM, OUTPUT, AUDIO, VIDEO, HOTKEYS, ACCESSIBILITY, ADVANCED, NUM_PAGES };
+	enum Pages { GENERAL, APPEARANCE, OSD, STREAM, OUTPUT, AUDIO, VIDEO, HOTKEYS, ACCESSIBILITY, ADVANCED, NUM_PAGES };
 
 private:
 	OBSBasic *main;
@@ -66,6 +68,7 @@ private:
 	bool hotkeysChanged = false;
 	bool a11yChanged = false;
 	bool appearanceChanged = false;
+	bool osdChanged = false;
 	bool advancedChanged = false;
 	int pageIndex = 0;
 	bool loading = true;
@@ -118,6 +121,18 @@ private:
 	uint32_t outputCY = 0;
 
 	QPointer<QCheckBox> simpleVodTrack;
+	QPointer<QCheckBox> osdEnabled;
+	QPointer<QCheckBox> osdShowStatus;
+	QPointer<QCheckBox> osdShowScenes;
+	QPointer<QCheckBox> osdShowSources;
+	QPointer<QCheckBox> osdShowBackendBadge;
+	QPointer<QSlider> osdOpacity;
+	QPointer<QSlider> osdScale;
+	QPointer<QLabel> osdOpacityValue;
+	QPointer<QLabel> osdScaleValue;
+	QPointer<QComboBox> osdAnchor;
+	QPointer<QComboBox> osdBackend;
+	QPointer<QComboBox> osdLayoutMode;
 
 	QPointer<QCheckBox> vodTrackCheckbox;
 	QPointer<QWidget> vodTrackContainer;
@@ -144,7 +159,7 @@ private:
 	inline bool Changed() const
 	{
 		return generalChanged || appearanceChanged || outputsChanged || stream1Changed || audioChanged ||
-		       videoChanged || advancedChanged || hotkeysChanged || a11yChanged;
+		       videoChanged || advancedChanged || hotkeysChanged || a11yChanged || osdChanged;
 	}
 
 	inline void EnableApplyButton(bool en) { ui->buttonBox->button(QDialogButtonBox::Apply)->setEnabled(en); }
@@ -160,6 +175,7 @@ private:
 		a11yChanged = false;
 		advancedChanged = false;
 		appearanceChanged = false;
+		osdChanged = false;
 		EnableApplyButton(false);
 	}
 
@@ -184,6 +200,9 @@ private:
 	void UpdateColorFormatSpaceWarning();
 
 	void LoadGeneralSettings();
+	void InitOSDSettingsPage();
+	void LoadOSDSettings();
+	void SaveOSDSettings();
 	void LoadStream1Settings();
 	void LoadOutputSettings();
 	void LoadAudioSettings();
@@ -409,6 +428,7 @@ private slots:
 	void ReloadHotkeys(obs_hotkey_id ignoreKey = OBS_INVALID_HOTKEY_ID);
 	void A11yChanged();
 	void AppearanceChanged();
+	void OSDChanged();
 	void AdvancedChanged();
 	void AdvancedChangedRestart();
 

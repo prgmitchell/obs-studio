@@ -10,6 +10,7 @@
 
 #include <detours.h>
 
+#include "d3d11-osd-compositor.hpp"
 #include "dxgi-helpers.hpp"
 
 #define MAX_BACKBUFFERS 8
@@ -42,6 +43,7 @@ struct d3d12_data {
 };
 
 static struct d3d12_data data = {};
+static struct d3d11_osd_compositor osd = {};
 
 extern thread_local int dxgi_presenting;
 extern ID3D12CommandQueue *dxgi_possible_swap_queues[8];
@@ -50,6 +52,8 @@ extern bool dxgi_present_attempted;
 
 void d3d12_free(void)
 {
+	d3d11_osd_compositor_free(&osd);
+
 	if (data.copy_tex)
 		data.copy_tex->Release();
 	if (data.device11)
@@ -64,6 +68,16 @@ void d3d12_free(void)
 	memset(&data, 0, sizeof(data));
 
 	hlog("----------------- d3d12 capture freed ----------------");
+}
+
+static void d3d12_render_osd(ID3D11Resource *backbuffer)
+{
+	if (!data.device11 || !data.context11)
+		return;
+
+	d3d11_osd_compositor_render(&osd, data.device11, data.context11, backbuffer, data.cx, data.cy, data.format,
+				    false,
+				    "d3d12_render_osd");
 }
 
 static bool create_d3d12_tex(UINT count)
@@ -269,7 +283,7 @@ static inline void d3d12_copy_texture(ID3D11Resource *dst, ID3D11Resource *src)
 	}
 }
 
-static inline void d3d12_shtex_capture(IDXGISwapChain *swap)
+static inline void d3d12_shtex_capture(IDXGISwapChain *swap, bool capture_frame)
 {
 	if (!data.device11on12) {
 		return;
@@ -287,22 +301,47 @@ static inline void d3d12_shtex_capture(IDXGISwapChain *swap)
 
 	ID3D12Resource *backbuffer12;
 	if (SUCCEEDED(swap->GetBuffer(cur_idx, IID_PPV_ARGS(&backbuffer12)))) {
-		D3D11_RESOURCE_FLAGS rf11 = {};
-		ID3D11Resource *backbuffer;
-		if (SUCCEEDED(data.device11on12->CreateWrappedResource(
-			    backbuffer12, &rf11, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
-			    IID_PPV_ARGS(&backbuffer)))) {
-			data.device11on12->AcquireWrappedResources(&backbuffer, 1);
-			d3d12_copy_texture(data.copy_tex, backbuffer);
-			data.device11on12->ReleaseWrappedResources(&backbuffer, 1);
-			data.context11->Flush();
+		HRESULT hr = S_OK;
 
-			if (!dxgi_1_4) {
-				if (++data.cur_backbuffer >= data.backbuffer_count)
-					data.cur_backbuffer = 0;
+		if (capture_frame) {
+			D3D11_RESOURCE_FLAGS capture_flags = {};
+			ID3D11Resource *capture_backbuffer;
+			hr = data.device11on12->CreateWrappedResource(
+				backbuffer12, &capture_flags, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
+				IID_PPV_ARGS(&capture_backbuffer));
+			if (SUCCEEDED(hr)) {
+				data.device11on12->AcquireWrappedResources(&capture_backbuffer, 1);
+				d3d12_copy_texture(data.copy_tex, capture_backbuffer);
+				data.device11on12->ReleaseWrappedResources(&capture_backbuffer, 1);
+				data.context11->Flush();
+				capture_backbuffer->Release();
+			} else {
+				hlog_hr("d3d12_shtex_capture: failed to create capture wrapped resource", hr);
 			}
+		}
 
-			backbuffer->Release();
+		if (global_hook_info->osd_flags & OSD_HOOK_ENABLED) {
+			D3D11_RESOURCE_FLAGS osd_flags = {};
+			osd_flags.BindFlags = D3D11_BIND_RENDER_TARGET;
+			ID3D11Resource *osd_backbuffer;
+			hr = data.device11on12->CreateWrappedResource(
+				backbuffer12, &osd_flags, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT,
+				IID_PPV_ARGS(&osd_backbuffer));
+			if (SUCCEEDED(hr)) {
+				data.device11on12->AcquireWrappedResources(&osd_backbuffer, 1);
+				d3d12_render_osd(osd_backbuffer);
+				data.device11on12->ReleaseWrappedResources(&osd_backbuffer, 1);
+				data.context11->Flush();
+				osd_backbuffer->Release();
+			} else {
+				global_hook_info->osd_flags |= OSD_HOOK_COMPOSITOR_FAILED;
+				hlog_hr("d3d12_shtex_capture: failed to create OSD wrapped resource", hr);
+			}
+		}
+
+		if (!dxgi_1_4) {
+			if (++data.cur_backbuffer >= data.backbuffer_count)
+				data.cur_backbuffer = 0;
 		}
 
 		backbuffer12->Release();
@@ -319,8 +358,8 @@ void d3d12_capture(void *swap_ptr, void *)
 	if (capture_should_init()) {
 		d3d12_init(swap);
 	}
-	if (data.handle != nullptr && capture_ready()) {
-		d3d12_shtex_capture(swap);
+	if (data.handle != nullptr) {
+		d3d12_shtex_capture(swap, capture_ready());
 	}
 }
 

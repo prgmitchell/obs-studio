@@ -55,6 +55,7 @@ class OBSBasicProperties;
 class OBSBasicTransform;
 class OBSLogViewer;
 class OBSMissingFiles;
+class OBSOSDController;
 class OBSProjector;
 class VolumeControl;
 #ifdef YOUTUBE_ENABLED
@@ -258,6 +259,7 @@ private:
 	std::string patronJson;
 
 	std::unique_ptr<Ui::OBSBasic> ui;
+	std::unique_ptr<OBSOSDController> osdController;
 
 	void OnEvent(enum obs_frontend_event event);
 
@@ -305,6 +307,7 @@ public:
 	bool ResetAudio();
 
 	void UpdateTitleBar();
+	void ReloadOSDSettings();
 
 	static OBSBasic *Get();
 
