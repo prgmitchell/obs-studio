@@ -167,10 +167,11 @@ static bool audio_monitor_init_wasapi(struct audio_monitor *monitor)
 	if (strcmp(id, "default") == 0) {
 		hr = immde->lpVtbl->GetDefaultAudioEndpoint(immde, eRender, eConsole, &device);
 	} else {
-		wchar_t w_id[512];
-		os_utf8_to_wcs(id, 0, w_id, 512);
+		wchar_t *w_id = NULL;
+		os_utf8_to_wcs_ptr(id, 0, &w_id);
 
 		hr = immde->lpVtbl->GetDevice(immde, w_id, &device);
+		bfree(w_id);
 	}
 
 	if (FAILED(hr)) {
